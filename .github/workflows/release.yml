@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # See ci.yml: lets the validate step resolve advisory-flagged Laravel 11.x so
+  # tests run against the full supported range. Revisit once 11.x is patched.
+  COMPOSER_NO_SECURITY_BLOCKING: "1"
+
 jobs:
   validate:
     name: Validate (tests green before publishing)

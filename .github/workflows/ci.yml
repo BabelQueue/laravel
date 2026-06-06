@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+env:
+  # Laravel 11.x currently carries open security advisories, and Composer 2.9+
+  # excludes advisory-affected versions during resolution — which breaks the
+  # Testbench ^9 (Laravel 11) matrix legs. We knowingly test compatibility
+  # against the supported framework range here (this is CI, not a deployment).
+  # Revisit once Laravel 11.x ships patched releases.
+  COMPOSER_NO_SECURITY_BLOCKING: "1"
+
 jobs:
   test:
     name: PHP ${{ matrix.php }} · Testbench ${{ matrix.testbench }}
