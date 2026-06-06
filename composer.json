@@ -1,0 +1,59 @@
+{
+    "name": "babelqueue/laravel",
+    "description": "Laravel adapter for BabelQueue: a drop-in polyglot queue driver. PHP produces strict JSON envelopes that Go, Python, Java, .NET and Node consumers read without PHP's serialize(). Built on babelqueue/php-sdk.",
+    "keywords": [
+        "laravel",
+        "queue",
+        "redis",
+        "rabbitmq",
+        "polyglot",
+        "microservices",
+        "json"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Muhammet Şafak",
+            "email": "info@muhammetsafak.com.tr"
+        }
+    ],
+    "homepage": "https://babelqueue.com",
+    "support": {
+        "issues": "https://github.com/BabelQueue/laravel/issues",
+        "source": "https://github.com/BabelQueue/laravel"
+    },
+    "require": {
+        "php": "^8.2",
+        "babelqueue/php-sdk": "^0.1",
+        "illuminate/support": "^11.0|^12.0",
+        "illuminate/queue": "^11.0|^12.0",
+        "php-amqplib/php-amqplib": "^3.7"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0",
+        "phpunit/phpunit": "^10.5|^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "BabelQueue\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "BabelQueue\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BabelQueue\\BabelQueueServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
