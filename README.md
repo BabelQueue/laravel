@@ -13,9 +13,8 @@ object graph only PHP can read. BabelQueue replaces just the **serialization
 layer** with a frozen JSON envelope and **URN-based routing**, over the broker you
 already run (Redis or RabbitMQ). No sidecar, no proxy, no broker plugin.
 
-This is the PHP/Laravel SDK. The full cross-language standard lives at
-**[babelqueue.com](https://babelqueue.com)**; the canonical contract is the
-[`.ssot/contracts/`](../.ssot/contracts/) directory.
+This is the PHP/Laravel SDK. The full cross-language standard and the canonical
+wire contract are documented at **[babelqueue.com](https://babelqueue.com)**.
 
 ---
 
@@ -61,7 +60,7 @@ Add a polyglot connection to `config/queue.php`:
 ## The wire envelope
 
 Every message is encoded as this frozen, `schema_version: 1` envelope
-(full spec: [`.ssot/contracts/message-envelope.md`](../.ssot/contracts/message-envelope.md)):
+(full spec at [babelqueue.com](https://babelqueue.com)):
 
 ```json
 {
@@ -177,8 +176,7 @@ vendor/bin/phpunit
 
 ## Links
 
-- Website & docs: <https://babelqueue.com>
-- Canonical contract (SSOT): [`.ssot/contracts/`](../.ssot/contracts/)
+- Website & docs (incl. the canonical wire contract): <https://babelqueue.com>
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 
 ## License

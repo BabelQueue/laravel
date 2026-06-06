@@ -19,7 +19,7 @@ use Throwable;
  * preserved verbatim — same trace_id, same meta.id — and an additive, OPTIONAL
  * top-level "dead_letter" block is attached describing why it failed. Because the
  * field is additive and optional, the envelope stays at schema_version 1
- * (see ../../.ssot/contracts/error-handling.md and ADR-0009).
+ * (normal consumers ignore it; see https://babelqueue.com).
  *
  * This is opt-in: when disabled (the default) every call is a no-op, so a worker
  * with no DLQ configured behaves exactly as before.

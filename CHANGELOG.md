@@ -5,7 +5,7 @@ All notable changes to `babelqueue/laravel` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The envelope wire format is versioned separately by `meta.schema_version`
-(currently **1**); see [`.ssot/contracts/versioning-policy.md`](../.ssot/contracts/versioning-policy.md).
+(currently **1**) — see the versioning policy at [babelqueue.com](https://babelqueue.com).
 
 ## [Unreleased]
 
