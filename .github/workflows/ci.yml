@@ -9,11 +9,13 @@ permissions:
   contents: read
 
 env:
-  # Laravel 11.x currently carries open security advisories, and Composer 2.9+
-  # excludes advisory-affected versions during resolution — which breaks the
-  # Testbench ^9 (Laravel 11) matrix legs. We knowingly test compatibility
-  # against the supported framework range here (this is CI, not a deployment).
-  # Revisit once Laravel 11.x ships patched releases.
+  # Composer 2.9+ excludes advisory-affected versions during resolution. The
+  # entire Laravel 11.x line (through v11.54.0) is still flagged by advisory
+  # PKSA-mdq4-51ck-6kdq with no patched 11.x release, which otherwise breaks the
+  # Testbench ^9 (Laravel 11) matrix legs. We knowingly test compatibility across
+  # the supported framework range here (this is CI, not a deployment).
+  # Re-checked 2026-06-06: still required. Revisit (and drop this) once a patched
+  # Laravel 11.x clears PKSA-mdq4-51ck-6kdq.
   COMPOSER_NO_SECURITY_BLOCKING: "1"
 
 jobs:
