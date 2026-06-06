@@ -9,13 +9,13 @@ permissions:
   contents: read
 
 env:
-  # Composer 2.9+ excludes advisory-affected versions during resolution. The
-  # entire Laravel 11.x line (through v11.54.0) is still flagged by advisory
-  # PKSA-mdq4-51ck-6kdq with no patched 11.x release, which otherwise breaks the
-  # Testbench ^9 (Laravel 11) matrix legs. We knowingly test compatibility across
-  # the supported framework range here (this is CI, not a deployment).
-  # Re-checked 2026-06-06: still required. Revisit (and drop this) once a patched
-  # Laravel 11.x clears PKSA-mdq4-51ck-6kdq.
+  # Composer 2.9+ excludes advisory-affected versions during resolution. The whole
+  # Laravel 11.x line (through v11.54.0) is flagged by advisory PKSA-mdq4-51ck-6kdq
+  # with no patched 11.x release, so this is needed ONLY for the Testbench ^9
+  # (Laravel 11) legs. Laravel 12.x is clean (Testbench ^10 resolves without it),
+  # so the env var is harmless on those legs. CI, not a deployment.
+  # Re-checked 2026-06-06 (Composer 2.9.5): still required for the ^9 legs. Drop it
+  # once a patched Laravel 11.x clears the advisory, or once 11 support is dropped.
   COMPOSER_NO_SECURITY_BLOCKING: "1"
 
 jobs:
@@ -46,3 +46,16 @@ jobs:
 
       - name: Run tests
         run: vendor/bin/phpunit
+
+  ci-green:
+    name: CI green
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: ${{ always() }}
+    steps:
+      - name: Fail if any required job did not pass
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "A required job failed or was cancelled."
+            exit 1
+          fi

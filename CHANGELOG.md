@@ -9,6 +9,19 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-06
+
+### Changed
+- Raise the core dependency to `babelqueue/php-sdk ^0.3`. The framework-less core
+  now also ships consumer-side validation and reference Redis/RabbitMQ transports;
+  this adapter's own behaviour is unchanged.
+
+### Notes
+- The version jumps to **0.3.0** (skipping 0.2.0) to align the PHP packages —
+  `php-sdk`, `laravel`, `symfony` — on a single version line.
+
+## [0.1.0] - 2026-06-06
+
 ### Added
 - Polyglot Redis (`babelqueue-redis`) and RabbitMQ (`babelqueue-rabbitmq`) queue
   drivers that emit the canonical JSON envelope (`schema_version` 1).
@@ -28,4 +41,6 @@ The envelope wire format is versioned separately by `meta.schema_version`
 - Pre-1.0: the public API may still change before the `1.0.0` tag.
 - Requires PHP `^8.2` and Laravel `^11.0 | ^12.0`; Redis or RabbitMQ.
 
-[Unreleased]: https://github.com/babelqueue/laravel/commits/main
+[Unreleased]: https://github.com/babelqueue/laravel/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/babelqueue/laravel/compare/v0.1.0...v0.3.0
+[0.1.0]: https://github.com/babelqueue/laravel/releases/tag/v0.1.0
