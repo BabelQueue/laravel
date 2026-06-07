@@ -18,8 +18,8 @@ use Illuminate\Support\Facades\Facade;
  * typed interface ({@see \BabelQueue\Contracts\ShouldQueuePolyglot}); both emit
  * the identical canonical envelope.
  *
- * @method static string publish(string $urn, array $data, ?string $queue = null, ?string $traceId = null)
- * @method static string later(\DateTimeInterface|\DateInterval|int $delay, string $urn, array $data, ?string $queue = null, ?string $traceId = null)
+ * @method static string publish(string $urn, array<string, mixed> $data, ?string $queue = null, ?string $traceId = null)
+ * @method static string later(\DateTimeInterface|\DateInterval|int $delay, string $urn, array<string, mixed> $data, ?string $queue = null, ?string $traceId = null)
  * @method static \BabelQueue\Producer\Publisher onConnection(?string $connection)
  *
  * @see \BabelQueue\Producer\Publisher

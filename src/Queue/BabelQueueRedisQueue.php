@@ -8,6 +8,7 @@ use BabelQueue\Contracts\ShouldQueuePolyglot;
 use BabelQueue\Queue\Jobs\BabelQueueJob;
 use BabelQueue\Codec\EnvelopeCodec;
 use Illuminate\Contracts\Queue\Job as JobContract;
+use Illuminate\Queue\Jobs\RedisJob;
 use Illuminate\Queue\RedisQueue;
 
 /**
@@ -59,8 +60,9 @@ class BabelQueueRedisQueue extends RedisQueue
     {
         $reserved = parent::pop($queue, $index);
 
-        if ($reserved === null) {
-            return null;
+        // The parent always reserves a RedisJob; anything else we cannot wrap.
+        if (! $reserved instanceof RedisJob) {
+            return $reserved;
         }
 
         return new BabelQueueJob(

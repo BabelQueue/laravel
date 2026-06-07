@@ -9,6 +9,13 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+### Internal
+- CI runs **Larastan (PHPStan level 6)** over `src` and enforces a line-coverage
+  floor (`bin/check-coverage.php`, currently 40% — target >=90% once queue-driver
+  integration tests land). Type-safety fixes surfaced by the analysis (Redis
+  `pop()` narrows to `RedisJob`; typed facade `@method` payloads) — no behaviour
+  change.
+
 ## [0.3.0] - 2026-06-06
 
 ### Changed

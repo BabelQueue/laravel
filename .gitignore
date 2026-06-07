@@ -2,6 +2,7 @@
 composer.lock
 .phpunit.result.cache
 .phpunit.cache/
+coverage.xml
 /.idea/
 /.vscode/
 .DS_Store

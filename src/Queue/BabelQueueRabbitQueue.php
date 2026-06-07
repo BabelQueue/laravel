@@ -239,7 +239,7 @@ class BabelQueueRabbitQueue extends Queue implements QueueContract
             [
                 'x-schema-version' => EnvelopeCodec::SCHEMA_VERSION,
                 'x-source-lang' => EnvelopeCodec::SOURCE_LANG,
-                'x-attempts' => $payload['attempts'] ?? 0,
+                'x-attempts' => $payload['attempts'],
             ],
             $delayMs,
         );
