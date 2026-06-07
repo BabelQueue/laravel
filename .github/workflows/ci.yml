@@ -65,10 +65,21 @@ jobs:
         run: vendor/bin/phpstan analyse --no-progress
 
   coverage:
-    # Floor gate (no-regression). Target is >=90% once the queue-driver
-    # integration tests land — tracked in the SSOT backlog.
-    name: Coverage gate (>=40%)
+    name: Coverage gate (>=90%)
     runs-on: ubuntu-latest
+    # The Redis driver round-trip test needs a real Redis (predis); the RabbitMQ
+    # driver is covered with a mocked AMQP channel, so no broker service is needed
+    # for it.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      BABELQUEUE_TEST_REDIS: redis://localhost:6379
     steps:
       - uses: actions/checkout@v5
       - name: Setup PHP
@@ -83,7 +94,7 @@ jobs:
       - name: Tests with coverage
         run: vendor/bin/phpunit --coverage-clover=coverage.xml
       - name: Enforce coverage gate
-        run: php bin/check-coverage.php coverage.xml 40
+        run: php bin/check-coverage.php coverage.xml 90
 
   ci-green:
     name: CI green

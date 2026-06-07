@@ -9,12 +9,23 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-07
+
+**1.0.0 — the public API is now SemVer-stable**: breaking changes require a MAJOR,
+following the deprecation policy. The wire envelope is unchanged
+(`schema_version: 1`). Full reference at [babelqueue.com](https://babelqueue.com).
+
+### Changed
+- Require `babelqueue/php-sdk ^1.0`.
+
 ### Internal
-- CI runs **Larastan (PHPStan level 6)** over `src` and enforces a line-coverage
-  floor (`bin/check-coverage.php`, currently 40% — target >=90% once queue-driver
-  integration tests land). Type-safety fixes surfaced by the analysis (Redis
-  `pop()` narrows to `RedisJob`; typed facade `@method` payloads) — no behaviour
-  change.
+- CI runs **Larastan (PHPStan level 6)** over `src` and enforces a **>=90%
+  line-coverage gate** (`bin/check-coverage.php`). Type-safety fixes surfaced by the
+  analysis (Redis `pop()` narrows to `RedisJob`; typed facade `@method` payloads) —
+  no behaviour change.
+- Coverage raised **40% → 90%**: the RabbitMQ driver/job/connector are tested
+  against a mocked AMQP channel (no broker), and the Redis driver round-trips
+  through a real Redis (`predis`, dev-only) in the coverage job's redis service.
 
 ## [0.3.0] - 2026-06-06
 
@@ -48,6 +59,7 @@ The envelope wire format is versioned separately by `meta.schema_version`
 - Pre-1.0: the public API may still change before the `1.0.0` tag.
 - Requires PHP `^8.2` and Laravel `^11.0 | ^12.0`; Redis or RabbitMQ.
 
-[Unreleased]: https://github.com/babelqueue/laravel/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/babelqueue/laravel/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/babelqueue/laravel/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/babelqueue/laravel/releases/tag/v0.1.0
