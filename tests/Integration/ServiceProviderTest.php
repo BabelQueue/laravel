@@ -7,6 +7,7 @@ namespace BabelQueue\Tests\Integration;
 use BabelQueue\Consumer\BabelQueueDispatcher;
 use BabelQueue\Queue\BabelQueueRabbitQueue;
 use BabelQueue\Queue\BabelQueueRedisQueue;
+use BabelQueue\Queue\BabelQueueSqsQueue;
 use BabelQueue\Tests\TestCase;
 use Illuminate\Support\Facades\Queue;
 
@@ -34,6 +35,15 @@ final class ServiceProviderTest extends TestCase
             'exchange' => '',
         ]);
 
+        $app['config']->set('queue.connections.bq-sqs', [
+            'driver' => 'babelqueue-sqs',
+            'key' => 'test',
+            'secret' => 'test',
+            'region' => 'us-east-1',
+            'prefix' => 'https://sqs.us-east-1.amazonaws.com/123456789012',
+            'queue' => 'default',
+        ]);
+
         $app['config']->set('babelqueue.handlers', [
             'urn:test:order' => \stdClass::class,
         ]);
@@ -47,6 +57,11 @@ final class ServiceProviderTest extends TestCase
     public function test_rabbitmq_connection_resolves_to_the_polyglot_queue(): void
     {
         $this->assertInstanceOf(BabelQueueRabbitQueue::class, Queue::connection('bq-rabbit'));
+    }
+
+    public function test_sqs_connection_resolves_to_the_polyglot_queue(): void
+    {
+        $this->assertInstanceOf(BabelQueueSqsQueue::class, Queue::connection('bq-sqs'));
     }
 
     public function test_dispatcher_is_a_singleton_built_from_config(): void

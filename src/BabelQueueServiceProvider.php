@@ -9,6 +9,7 @@ use BabelQueue\Consumer\DeadLetterPublisher;
 use BabelQueue\Producer\Publisher;
 use BabelQueue\Queue\Connectors\BabelQueueRabbitConnector;
 use BabelQueue\Queue\Connectors\BabelQueueRedisConnector;
+use BabelQueue\Queue\Connectors\BabelQueueSqsConnector;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Queue\QueueManager;
 use Illuminate\Support\ServiceProvider;
@@ -79,6 +80,10 @@ class BabelQueueServiceProvider extends ServiceProvider
 
         $manager->addConnector('babelqueue-rabbitmq', function (): BabelQueueRabbitConnector {
             return new BabelQueueRabbitConnector();
+        });
+
+        $manager->addConnector('babelqueue-sqs', function (): BabelQueueSqsConnector {
+            return new BabelQueueSqsConnector();
         });
 
         if ($this->app->runningInConsole()) {

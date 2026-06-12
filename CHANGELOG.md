@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The envelope wire format is versioned separately by `meta.schema_version`
 (currently **1**) — see the versioning policy at [babelqueue.com](https://babelqueue.com).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-12
+
+### Added
+- **Amazon SQS drop-in driver** (`babelqueue-sqs`) — a polyglot Amazon SQS queue on
+  Laravel's native `sqs` driver, implementing [§3 of the broker-bindings
+  contract](https://babelqueue.com). `BabelQueueSqsQueue` (extends Illuminate
+  `SqsQueue`) emits `ShouldQueuePolyglot` jobs as the canonical envelope and projects it
+  onto native SQS `MessageAttributes` (`bq-job`/`bq-trace-id`/`bq-message-id`/
+  `bq-schema-version`/`bq-source-lang`/`bq-created-at`) — so a Go/Python/… consumer can
+  route and trace without decoding the body; standard Laravel jobs pass straight through
+  (no attributes). `BabelQueueSqsConnector` mirrors the stock `SqsConnector` (credentials,
+  prefix/suffix) but returns the polyglot queue; `BabelQueueSqsJob` re-wraps the reserved
+  `SqsJob` so consumption routes by URN through the dispatcher. Registered as the
+  `babelqueue-sqs` connector. Requires `aws/aws-sdk-php` (suggested). The envelope is
+  unchanged (`schema_version: 1`); SQS is purely additive.
 
 ## [1.0.0] - 2026-06-07
 
@@ -59,7 +73,8 @@ following the deprecation policy. The wire envelope is unchanged
 - Pre-1.0: the public API may still change before the `1.0.0` tag.
 - Requires PHP `^8.2` and Laravel `^11.0 | ^12.0`; Redis or RabbitMQ.
 
-[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/babelqueue/laravel/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/babelqueue/laravel/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/babelqueue/laravel/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/babelqueue/laravel/releases/tag/v0.1.0

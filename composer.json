@@ -31,10 +31,14 @@
         "php-amqplib/php-amqplib": "^3.7"
     },
     "require-dev": {
+        "aws/aws-sdk-php": "^3.0",
         "larastan/larastan": "^3.0",
         "orchestra/testbench": "^9.0|^10.0",
         "phpunit/phpunit": "^10.5|^11.0",
         "predis/predis": "^2.2"
+    },
+    "suggest": {
+        "aws/aws-sdk-php": "Required for the drop-in Amazon SQS driver (babelqueue-sqs)."
     },
     "autoload": {
         "psr-4": {
