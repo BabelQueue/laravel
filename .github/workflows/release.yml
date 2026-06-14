@@ -33,9 +33,41 @@ jobs:
       - name: Run tests
         run: vendor/bin/phpunit
 
+  coverage:
+    name: Coverage gate (>=90%)
+    runs-on: ubuntu-latest
+    # Mirrors ci.yml's coverage job: a <90% tag must never publish. The Redis
+    # driver round-trip test needs a real Redis (predis); the RabbitMQ driver is
+    # covered with a mocked AMQP channel, so no broker service is needed for it.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      BABELQUEUE_TEST_REDIS: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, json, sockets, bcmath
+          coverage: pcov
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+      - name: Tests with coverage
+        run: vendor/bin/phpunit --coverage-clover=coverage.xml
+      - name: Enforce coverage gate
+        run: php bin/check-coverage.php coverage.xml 90
+
   release:
     name: Publish
-    needs: validate
+    needs: [validate, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
