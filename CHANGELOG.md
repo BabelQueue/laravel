@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The envelope wire format is versioned separately by `meta.schema_version`
 (currently **1**) — see the versioning policy at [babelqueue.com](https://babelqueue.com).
 
+## [1.2.1] - 2026-06-14
+
+### Internal
+- Restore the **≥90% coverage gate** after the v1.2.0 Artemis driver landed: split
+  `BabelQueueArtemisConnector` into a unit-testable `configureClient()` (builds the configured
+  STOMP client, no socket) and `makeConnection()` (connects), and add targeted tests for the
+  remaining `BabelQueueArtemisQueue`/`BabelQueueArtemisJob` branches. **No runtime or API change** —
+  the `babelqueue-artemis` driver behaves identically to v1.2.0; this is a tests + behaviour-
+  preserving refactor that lifts overall coverage to ~92%.
+
 ## [1.2.0] - 2026-06-14
 
 ### Added
@@ -96,7 +106,8 @@ following the deprecation policy. The wire envelope is unchanged
 - Pre-1.0: the public API may still change before the `1.0.0` tag.
 - Requires PHP `^8.2` and Laravel `^11.0 | ^12.0`; Redis or RabbitMQ.
 
-[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/babelqueue/laravel/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/babelqueue/laravel/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/babelqueue/laravel/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/babelqueue/laravel/compare/v0.3.0...v1.0.0
