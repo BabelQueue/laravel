@@ -6,3 +6,6 @@ coverage.xml
 /.idea/
 /.vscode/
 .DS_Store
+
+# CommitBrief local config and cache
+.commitbrief/

@@ -27,47 +27,60 @@ class BabelQueueArtemisConnector implements ConnectorInterface
     /**
      * Establish a queue connection backed by the polyglot Artemis (STOMP) queue.
      *
+     * It does NOT open a socket eagerly: the queue receives a lazy factory closure that builds and
+     * connects a STOMP client on first use, which also makes transparent reconnection trivial.
+     *
      * @param  array<string, mixed>  $config
      */
     public function connect(array $config): Queue
     {
-        return new BabelQueueArtemisQueue($this->connectionFactory($config), $config);
+        return new BabelQueueArtemisQueue(fn (): StatefulStomp => $this->makeConnection($config), $config);
     }
 
     /**
-     * Build a closure that returns a fresh, connected STOMP client.
+     * Build a configured client and connect it.
      *
      * @param  array<string, mixed>  $config
-     * @return \Closure(): StatefulStomp
      */
-    protected function connectionFactory(array $config): \Closure
+    protected function makeConnection(array $config): StatefulStomp
     {
-        return static function () use ($config): StatefulStomp {
-            $scheme = ($config['options']['ssl'] ?? false) !== false ? 'ssl' : 'tcp';
-            $uri = sprintf(
-                '%s://%s:%d',
-                $scheme,
-                (string) ($config['host'] ?? '127.0.0.1'),
-                (int) ($config['port'] ?? 61613),
-            );
+        $client = $this->configureClient($config);
+        $client->connect();
 
-            $client = new Client($uri);
+        return new StatefulStomp($client);
+    }
 
-            if (! empty($config['username'])) {
-                $client->setLogin((string) $config['username'], (string) ($config['password'] ?? ''));
-            }
+    /**
+     * Build a configured-but-unconnected STOMP client from the connection config (URI, credentials,
+     * vhost, read timeout). Separated from the socket-opening connect() so it is unit-testable
+     * without a broker.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    protected function configureClient(array $config): Client
+    {
+        $scheme = ($config['options']['ssl'] ?? false) !== false ? 'ssl' : 'tcp';
+        $uri = sprintf(
+            '%s://%s:%d',
+            $scheme,
+            (string) ($config['host'] ?? '127.0.0.1'),
+            (int) ($config['port'] ?? 61613),
+        );
 
-            if (! empty($config['vhost'])) {
-                $client->setVhostname((string) $config['vhost']);
-            }
+        $client = new Client($uri);
 
-            // A short read timeout makes pop() non-blocking-ish: read() returns no frame once the
-            // timeout lapses, so the Laravel worker loop polls instead of blocking indefinitely.
-            $client->getConnection()->setReadTimeout((int) ($config['read_timeout'] ?? 1), 0);
+        if (! empty($config['username'])) {
+            $client->setLogin((string) $config['username'], (string) ($config['password'] ?? ''));
+        }
 
-            $client->connect();
+        if (! empty($config['vhost'])) {
+            $client->setVhostname((string) $config['vhost']);
+        }
 
-            return new StatefulStomp($client);
-        };
+        // A short read timeout makes pop() non-blocking-ish: read() returns no frame once the
+        // timeout lapses, so the Laravel worker loop polls instead of blocking indefinitely.
+        $client->getConnection()->setReadTimeout((int) ($config['read_timeout'] ?? 1), 0);
+
+        return $client;
     }
 }

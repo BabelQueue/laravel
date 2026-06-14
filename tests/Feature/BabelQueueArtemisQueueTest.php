@@ -11,6 +11,7 @@ use BabelQueue\Queue\Connectors\BabelQueueArtemisConnector;
 use BabelQueue\Queue\Jobs\BabelQueueArtemisJob;
 use BabelQueue\Tests\TestCase;
 use Mockery;
+use Stomp\Client;
 use Stomp\StatefulStomp;
 use Stomp\Transport\Frame;
 use Stomp\Transport\Message;
@@ -168,6 +169,78 @@ final class BabelQueueArtemisQueueTest extends TestCase
         $stomp = Mockery::mock(StatefulStomp::class);
 
         $this->assertSame(0, $this->makeQueue($stomp)->size('orders'));
+    }
+
+    public function test_later_with_a_standard_job_sets_the_scheduled_delay(): void
+    {
+        $captured = null;
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('send')->once()->with(
+            'orders',
+            Mockery::on(function (Message $m) use (&$captured): bool {
+                $captured = $m;
+
+                return true;
+            }),
+        );
+
+        $this->makeQueue($stomp)->later(5, new ArtemisPlainJob());
+
+        $this->assertSame('5000', $captured['AMQ_SCHEDULED_DELAY']);
+    }
+
+    public function test_push_raw_with_a_non_json_payload_returns_a_null_id(): void
+    {
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('send')->once();
+
+        $this->assertNull($this->makeQueue($stomp)->pushRaw('not-json', 'orders'));
+    }
+
+    public function test_pop_reuses_the_subscription_on_subsequent_reads(): void
+    {
+        $body = EnvelopeCodec::encode(EnvelopeCodec::fromJob(new ArtemisOrderJob(), 'orders'));
+
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('subscribe')->once()->with('orders', null, 'client-individual'); // ONCE across both pops
+        $stomp->shouldReceive('read')->twice()->andReturn(new Frame('MESSAGE', [], $body));
+
+        $queue = $this->makeQueue($stomp);
+        $this->assertInstanceOf(BabelQueueArtemisJob::class, $queue->pop('orders'));
+        $this->assertInstanceOf(BabelQueueArtemisJob::class, $queue->pop('orders')); // memoised subscription
+    }
+
+    public function test_get_job_id_falls_back_to_the_stomp_message_id_without_a_meta_id(): void
+    {
+        // A body with no meta.id → getJobId() falls back to the STOMP message-id header.
+        $body = '{"job":"urn:babel:x","trace_id":"t","data":{},"meta":{"queue":"orders",'
+            . '"lang":"php","schema_version":1},"attempts":0}';
+
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('subscribe')->once();
+        $stomp->shouldReceive('read')->once()->andReturn(new Frame('MESSAGE', ['message-id' => 'stomp-99'], $body));
+
+        $job = $this->makeQueue($stomp)->pop('orders');
+
+        $this->assertSame('stomp-99', $job->getJobId());
+    }
+
+    public function test_configure_client_builds_a_configured_stomp_client_without_a_socket(): void
+    {
+        $connector = new class extends BabelQueueArtemisConnector {
+            /** @param array<string,mixed> $config */
+            public function expose(array $config): Client
+            {
+                return $this->configureClient($config);
+            }
+        };
+
+        $client = $connector->expose([
+            'host' => 'broker', 'port' => 61613, 'username' => 'u', 'password' => 'p',
+            'vhost' => '/', 'read_timeout' => 2, 'options' => ['ssl' => true],
+        ]);
+
+        $this->assertInstanceOf(Client::class, $client);
     }
 
     public function test_connector_builds_an_artemis_queue_without_opening_a_socket(): void
