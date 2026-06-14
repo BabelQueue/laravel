@@ -54,6 +54,20 @@ Add a polyglot connection to `config/queue.php`:
         'exchange'      => '',
         'exchange_type' => 'direct',
     ],
+
+    // Apache ActiveMQ Artemis over STOMP (the §7 path; requires stomp-php/stomp-php).
+    // Consumes messages produced by the Java (JMS) / .NET / Node / Python / Go Artemis
+    // SDKs — Artemis bridges STOMP ↔ AMQP 1.0 ↔ JMS on the same address.
+    'bq-artemis' => [
+        'driver'             => 'babelqueue-artemis',
+        'host'               => env('ARTEMIS_HOST', '127.0.0.1'),
+        'port'               => env('ARTEMIS_STOMP_PORT', 61613),
+        'username'           => env('ARTEMIS_USER', 'artemis'),
+        'password'           => env('ARTEMIS_PASSWORD', 'artemis'),
+        'queue'              => 'default',
+        'destination_prefix' => '',   // e.g. '/queue/' if your Artemis needs the anycast prefix
+        'read_timeout'       => 1,    // seconds a pop() waits before returning empty
+    ],
 ],
 ```
 

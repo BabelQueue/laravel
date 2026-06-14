@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The envelope wire format is versioned separately by `meta.schema_version`
 (currently **1**) — see the versioning policy at [babelqueue.com](https://babelqueue.com).
 
+## [1.2.0] - 2026-06-14
+
+### Added
+- **Apache ActiveMQ Artemis drop-in driver** (`babelqueue-artemis`) — a polyglot Artemis
+  queue over **STOMP**, the PHP path to [§7 of the broker-bindings
+  contract](https://babelqueue.com/docs/spec/1.x/broker-bindings#apache-activemq-artemis)
+  (ADR-0018). It is the **consume** half for PHP: Java (JMS) / .NET / Node / Python / Go
+  produce on an Artemis address and a Laravel `queue:work babelqueue-artemis` worker
+  consumes it — Artemis bridges STOMP ↔ AMQP 1.0 ↔ JMS on the same address.
+  `BabelQueueArtemisQueue` (on the pure-PHP `stomp-php` client) sends `ShouldQueuePolyglot`
+  jobs as the canonical envelope with the §7 STOMP headers (`content-type`,
+  `correlation-id` = `trace_id`, and the string `bq_schema_version`/`bq_source_lang`/
+  `bq_attempts`/`bq_app_id`); `pop()` subscribes with `client-individual` ack and wraps each
+  frame as `BabelQueueArtemisJob`, where `delete()` ACKs and `release()` republishes with an
+  incremented attempt counter then ACKs (at-least-once). **Routing is body-authoritative**
+  (§7.8): the dispatcher routes on the envelope's `job` URN, since a STOMP frame cannot set
+  the `x-opt-jms-type` annotation. `BabelQueueArtemisConnector` opens no socket eagerly (a
+  lazy STOMP connection factory); native scheduled delivery via the `AMQ_SCHEDULED_DELAY`
+  header. Registered as the `babelqueue-artemis` connector. Requires `stomp-php/stomp-php`
+  (suggested). Proven live with a **Java(JMS) → Laravel(STOMP)** cross-protocol round-trip
+  over a real Artemis. The envelope is unchanged (`schema_version: 1`); Artemis is purely
+  additive.
+
 ## [1.1.0] - 2026-06-12
 
 ### Added
@@ -73,7 +96,8 @@ following the deprecation policy. The wire envelope is unchanged
 - Pre-1.0: the public API may still change before the `1.0.0` tag.
 - Requires PHP `^8.2` and Laravel `^11.0 | ^12.0`; Redis or RabbitMQ.
 
-[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/babelqueue/laravel/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/babelqueue/laravel/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/babelqueue/laravel/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/babelqueue/laravel/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/babelqueue/laravel/compare/v0.1.0...v0.3.0

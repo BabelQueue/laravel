@@ -7,6 +7,7 @@ namespace BabelQueue;
 use BabelQueue\Consumer\BabelQueueDispatcher;
 use BabelQueue\Consumer\DeadLetterPublisher;
 use BabelQueue\Producer\Publisher;
+use BabelQueue\Queue\Connectors\BabelQueueArtemisConnector;
 use BabelQueue\Queue\Connectors\BabelQueueRabbitConnector;
 use BabelQueue\Queue\Connectors\BabelQueueRedisConnector;
 use BabelQueue\Queue\Connectors\BabelQueueSqsConnector;
@@ -84,6 +85,10 @@ class BabelQueueServiceProvider extends ServiceProvider
 
         $manager->addConnector('babelqueue-sqs', function (): BabelQueueSqsConnector {
             return new BabelQueueSqsConnector();
+        });
+
+        $manager->addConnector('babelqueue-artemis', function (): BabelQueueArtemisConnector {
+            return new BabelQueueArtemisConnector();
         });
 
         if ($this->app->runningInConsole()) {
