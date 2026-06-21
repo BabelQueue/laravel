@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace BabelQueue\Consumer;
 
+use BabelQueue\Contracts\ConsumedMessage;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\Exceptions\UnknownUrnException;
+use BabelQueue\Idempotency\ClaimingDispatch;
+use BabelQueue\Idempotency\ClaimingStore;
+use BabelQueue\Idempotency\Idempotent;
+use BabelQueue\Idempotency\IdempotencyStore;
 use Illuminate\Contracts\Container\Container;
 use Throwable;
 
@@ -23,6 +28,10 @@ final class BabelQueueDispatcher
     /**
      * @param  array<string, class-string>  $handlers  urn => handler class
      * @param  string  $onUnknownUrn  fail | delete | release | dead_letter
+     * @param  IdempotencyStore|null  $idempotencyStore  When set, deliveries are deduped on
+     *                                                    "meta.id" so a duplicate runs the handler
+     *                                                    zero times (opt-in; null = unchanged).
+     * @param  int  $idempotencyTtl  In-flight claim TTL (seconds) for a {@see ClaimingStore}.
      */
     public function __construct(
         private Container $container,
@@ -30,6 +39,8 @@ final class BabelQueueDispatcher
         private string $onUnknownUrn = 'fail',
         private int $unknownUrnReleaseDelay = 0,
         private ?DeadLetterPublisher $deadLetter = null,
+        private ?IdempotencyStore $idempotencyStore = null,
+        private int $idempotencyTtl = ClaimingDispatch::DEFAULT_TTL,
     ) {
     }
 
@@ -53,17 +64,60 @@ final class BabelQueueDispatcher
 
         $handler = $this->container->make($handlerClass);
 
-        $this->container->call([$handler, 'handle'], [
-            'data' => $message->getData(),
-            'meta' => $message->getMeta(),
-            'traceId' => $message->getTraceId(),
-            'message' => $message,
-            'job' => $message,
-        ]);
+        // The unit of work for this delivery: invoke the URN-mapped handler. When
+        // idempotency is enabled this is what the php-sdk helper either runs once
+        // (first delivery) or skips (a duplicate / a committed id).
+        $run = function () use ($handler, $message): void {
+            $this->container->call([$handler, 'handle'], [
+                'data' => $message->getData(),
+                'meta' => $message->getMeta(),
+                'traceId' => $message->getTraceId(),
+                'message' => $message,
+                'job' => $message,
+            ]);
+        };
 
+        $this->runIdempotent($message, $run);
+
+        // Ack the delivery — whether the handler ran (first time) or was skipped as
+        // a duplicate. A skipped duplicate must still be acked so the broker stops
+        // redelivering it. A parked/in-flight claim throws before reaching here, so
+        // it is NOT acked and the broker redelivers it later.
         if (! $message->isDeletedOrReleased()) {
             $message->delete();
         }
+    }
+
+    /**
+     * Run the per-delivery unit of work, deduped on the envelope's "meta.id" when a store is
+     * configured. Reuses the php-sdk helpers as the single source of dedup logic:
+     *   - a {@see ClaimingStore} drives {@see ClaimingDispatch::wrap()} (atomic in-flight claim →
+     *     park a concurrent duplicate via a thrown {@see \BabelQueue\Idempotency\ClaimParkedException});
+     *   - any other {@see IdempotencyStore} drives {@see Idempotent::wrap()} (post-success dedupe).
+     * With no store, the work runs unchanged.
+     *
+     * @param  callable(): void  $run
+     */
+    private function runIdempotent(PolyglotMessage $message, callable $run): void
+    {
+        if ($this->idempotencyStore === null) {
+            $run();
+
+            return;
+        }
+
+        // The helpers type-hint the core ConsumedMessage view and only read "meta.id" off it; the
+        // adapter exposes the Laravel job's decoded envelope without touching its frozen contract.
+        $consumed = new PolyglotConsumedMessage($message);
+        $handler = static function (ConsumedMessage $ignored) use ($run): void {
+            $run();
+        };
+
+        $wrapped = $this->idempotencyStore instanceof ClaimingStore
+            ? ClaimingDispatch::wrap($this->idempotencyStore, $handler, $this->idempotencyTtl)
+            : Idempotent::wrap($this->idempotencyStore, $handler);
+
+        $wrapped($consumed);
     }
 
     /**

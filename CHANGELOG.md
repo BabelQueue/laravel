@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The envelope wire format is versioned separately by `meta.schema_version`
 (currently **1**) — see the versioning policy at [babelqueue.com](https://babelqueue.com).
 
+## [Unreleased]
+
+### Added
+- **Opt-in idempotent consumption** — a `babelqueue-*` worker can now dedupe redelivered
+  messages on the envelope's canonical `meta.id`, so a duplicate delivery is a no-op and the
+  first delivery runs the handler exactly once (the consume-side half of "handlers SHOULD be
+  idempotent", ADR-0022). It is **off by default** and **does not touch the frozen wire
+  envelope** — dedupe is a consume-side concern, never an envelope change.
+  - New `idempotency` block in `config/babelqueue.php`: `enabled` (default `false`), `store`
+    (`redis` | `database` | `memory`), `connection`, `ttl`, `table`, `prefix`. Configure via
+    `BABELQUEUE_IDEMPOTENCY_*` env vars.
+  - Default backends are **Laravel-native**: `redis` maps onto a Laravel Redis (predis)
+    connection and `database` onto a Laravel DB connection (PostgreSQL / MySQL / SQLite), both
+    bound in the service provider as a php-sdk `IdempotencyStore` (rebindable to a custom store).
+    Both are **claiming** stores, so two workers handed the same id never both run the handler —
+    the loser parks for redelivery (`ClaimingDispatch`); `memory` is single-process only.
+  - The `BabelQueueDispatcher` wraps each URN handler with the php-sdk
+    `Idempotent::wrap` / `ClaimingDispatch::wrap` helpers (no logic duplicated). A thrown handler
+    leaves the id unmarked, so retry / DLQ still apply.
+- Bumped the `babelqueue/php-sdk` constraint to **^1.15.0** (the release that ships the persistent
+  `RedisStore` / `PdoStore` and `ClaimingDispatch`).
+
 ## [1.2.1] - 2026-06-14
 
 ### Internal

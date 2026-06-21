@@ -54,6 +54,56 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Idempotent Consumption (opt-in)
+    |--------------------------------------------------------------------------
+    |
+    | Under at-least-once delivery a broker can hand the SAME message to a
+    | consumer more than once (a redelivery after a missed ack, a fan-out). When
+    | this is enabled, BabelQueue dedupes deliveries on the envelope's canonical
+    | per-message identity — "meta.id" — so a duplicate delivery is a no-op and
+    | the first delivery runs the handler exactly once. It wraps every URN
+    | handler with the php-sdk idempotency helper; it does NOT touch the frozen
+    | wire envelope. See ADR-0022.
+    |
+    | Disabled by default: with 'enabled' => false (or no store), behaviour is
+    | byte-for-byte unchanged. A message with no usable "meta.id" always runs
+    | (fail-open), enabled or not.
+    |
+    |   enabled    — turn idempotent consumption on/off (off by default)
+    |   store      — which backend records processed ids:
+    |                   'redis'    — php-sdk RedisStore over a Laravel Redis
+    |                                connection (predis); a CLAIMING store, so two
+    |                                workers handed the same id never both run it
+    |                                (the loser parks for redelivery).
+    |                   'database' — php-sdk PdoStore over a Laravel DB connection
+    |                                (PostgreSQL / MySQL / SQLite); also a CLAIMING
+    |                                store. Run the DDL once at deploy time:
+    |                                  DB::connection($conn)->getPdo()
+    |                                      ->exec(\BabelQueue\Idempotency\PdoStore::ddl($table));
+    |                   'memory'   — php-sdk InMemoryStore; single-process only
+    |                                (tests / a single worker). NOT shared, NOT
+    |                                persistent — never use it across a fleet.
+    |   connection — the Redis or database connection name (null = that store's
+    |                default Laravel connection).
+    |   ttl        — seconds an in-flight claim is held before a crashed worker's
+    |                id may be re-claimed (the crash backstop, not a handler
+    |                timeout). Applies to the claiming 'redis'/'database' stores.
+    |   table      — dedupe table name for the 'database' store.
+    |   prefix     — key namespace for the 'redis' store.
+    |
+    */
+
+    'idempotency' => [
+        'enabled' => env('BABELQUEUE_IDEMPOTENCY_ENABLED', false),
+        'store' => env('BABELQUEUE_IDEMPOTENCY_STORE', 'redis'),
+        'connection' => env('BABELQUEUE_IDEMPOTENCY_CONNECTION'),
+        'ttl' => (int) env('BABELQUEUE_IDEMPOTENCY_TTL', 3600),
+        'table' => 'bq_idempotency',
+        'prefix' => 'bq:idem:',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Default Publisher Connection
     |--------------------------------------------------------------------------
     |

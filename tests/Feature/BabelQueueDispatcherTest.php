@@ -8,6 +8,9 @@ use BabelQueue\Consumer\BabelQueueDispatcher;
 use BabelQueue\Consumer\DeadLetterPublisher;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\Exceptions\UnknownUrnException;
+use BabelQueue\Idempotency\ClaimingStore;
+use BabelQueue\Idempotency\ClaimParkedException;
+use BabelQueue\Idempotency\InMemoryStore;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
 use BabelQueue\Tests\TestCase;
 use Illuminate\Container\Container;
@@ -65,6 +68,177 @@ final class BabelQueueDispatcherTest extends TestCase
 
         (new BabelQueueDispatcher($this->app, [], 'delete'))->dispatch($message);
 
+        $this->assertTrue($message->isDeleted());
+    }
+
+    public function test_idempotency_disabled_runs_handler_on_every_delivery(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        // No store passed → behaviour is unchanged: each delivery of the same id runs the handler.
+        $dispatcher = new BabelQueueDispatcher($this->app, [
+            'urn:babel:orders:process' => CountingConsumerStub::class,
+        ]);
+
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"dup-1"}}';
+        $first = $this->message($body);
+        $second = $this->message($body);
+
+        $dispatcher->dispatch($first);
+        $dispatcher->dispatch($second);
+
+        $this->assertSame(2, CountingConsumerStub::$count, 'with idempotency off the handler runs per delivery');
+        $this->assertTrue($first->isDeleted());
+        $this->assertTrue($second->isDeleted());
+    }
+
+    public function test_idempotent_consumption_dedupes_a_duplicate_delivery(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        // A shared in-memory store across both deliveries: the first runs, the duplicate is skipped.
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => CountingConsumerStub::class],
+            'fail',
+            0,
+            null,
+            new InMemoryStore(),
+        );
+
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"dup-2"}}';
+        $first = $this->message($body);
+        $second = $this->message($body);
+
+        $dispatcher->dispatch($first);
+        $dispatcher->dispatch($second);
+
+        $this->assertSame(1, CountingConsumerStub::$count, 'a duplicate delivery must not run the handler again');
+        $this->assertTrue($first->isDeleted(), 'first delivery is acked after running');
+        $this->assertTrue($second->isDeleted(), 'a deduped duplicate is still acked so the broker stops redelivering');
+    }
+
+    public function test_idempotent_consumption_runs_a_distinct_id(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        $store = new InMemoryStore();
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => CountingConsumerStub::class],
+            'fail',
+            0,
+            null,
+            $store,
+        );
+
+        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"a"}}'));
+        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"b"}}'));
+
+        $this->assertSame(2, CountingConsumerStub::$count, 'distinct ids each run once');
+    }
+
+    public function test_idempotent_consumption_is_fail_open_without_a_message_id(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => CountingConsumerStub::class],
+            'fail',
+            0,
+            null,
+            new InMemoryStore(),
+        );
+
+        // No usable meta.id → cannot dedupe; every delivery runs (fail-open).
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{}}';
+        $dispatcher->dispatch($this->message($body));
+        $dispatcher->dispatch($this->message($body));
+
+        $this->assertSame(2, CountingConsumerStub::$count);
+    }
+
+    public function test_failed_handler_leaves_id_unmarked_so_a_redelivery_reruns(): void
+    {
+        ThrowOnceConsumerStub::$attempts = 0;
+
+        $store = new InMemoryStore();
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => ThrowOnceConsumerStub::class],
+            'fail',
+            0,
+            null,
+            $store,
+        );
+
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"retry-1"}}';
+
+        // First delivery throws → the id is NOT remembered, the exception propagates (retry/DLQ apply).
+        try {
+            $dispatcher->dispatch($this->message($body));
+            $this->fail('the failing handler should have thrown');
+        } catch (RuntimeException $e) {
+            $this->assertSame('boom', $e->getMessage());
+        }
+        $this->assertFalse($store->seen('retry-1'), 'a thrown handler must not mark the id seen');
+
+        // Redelivery: the handler runs again and now succeeds, then commits.
+        $dispatcher->dispatch($this->message($body));
+
+        $this->assertSame(2, ThrowOnceConsumerStub::$attempts);
+        $this->assertTrue($store->seen('retry-1'));
+    }
+
+    public function test_claiming_store_parks_a_concurrent_in_flight_duplicate(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        // A claiming store whose claim() is already held → ClaimingDispatch throws ClaimParkedException
+        // so the delivery is NOT acked and the broker redelivers it later.
+        $store = new FakeClaimingStore(claimGranted: false, seen: false);
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => CountingConsumerStub::class],
+            'fail',
+            0,
+            null,
+            $store,
+        );
+
+        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"inflight-1"}}');
+
+        try {
+            $dispatcher->dispatch($message);
+            $this->fail('a lost claim should park via ClaimParkedException');
+        } catch (ClaimParkedException $e) {
+            $this->assertSame('inflight-1', $e->messageId);
+        }
+
+        $this->assertSame(0, CountingConsumerStub::$count, 'a parked delivery does not run the handler');
+        $this->assertFalse($message->isDeleted(), 'a parked delivery must NOT be acked');
+    }
+
+    public function test_claiming_store_runs_then_commits_when_the_claim_is_won(): void
+    {
+        CountingConsumerStub::$count = 0;
+
+        $store = new FakeClaimingStore(claimGranted: true, seen: false);
+        $dispatcher = new BabelQueueDispatcher(
+            $this->app,
+            ['urn:babel:orders:process' => CountingConsumerStub::class],
+            'fail',
+            0,
+            null,
+            $store,
+        );
+
+        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"won-1"}}');
+        $dispatcher->dispatch($message);
+
+        $this->assertSame(1, CountingConsumerStub::$count);
+        $this->assertSame(['won-1'], $store->remembered, 'a won claim commits on success');
         $this->assertTrue($message->isDeleted());
     }
 
@@ -175,5 +349,89 @@ class OrderConsumerStub
     public function failed(array $data, ?\Throwable $exception): void
     {
         self::$failed = true;
+    }
+}
+
+/**
+ * Counts how many times handle() runs — the probe for "did the handler run once / twice / zero
+ * times" under idempotent consumption.
+ */
+class CountingConsumerStub
+{
+    public static int $count = 0;
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, mixed>  $meta
+     */
+    public function handle(array $data, array $meta, string $traceId): void
+    {
+        self::$count++;
+    }
+}
+
+/**
+ * Throws on its first invocation and succeeds afterwards — proves a thrown handler leaves the id
+ * unmarked so a redelivery re-runs (post-success dedupe, not at-least-once defeating).
+ */
+class ThrowOnceConsumerStub
+{
+    public static int $attempts = 0;
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, mixed>  $meta
+     */
+    public function handle(array $data, array $meta, string $traceId): void
+    {
+        self::$attempts++;
+
+        if (self::$attempts === 1) {
+            throw new RuntimeException('boom');
+        }
+    }
+}
+
+/**
+ * A deterministic {@see ClaimingStore} fake: claim() returns a fixed verdict and seen() a fixed
+ * flag, so the test drives the {@see \BabelQueue\Idempotency\ClaimingDispatch} branches (claim won
+ * vs lost) without a live Redis/PDO backend.
+ */
+final class FakeClaimingStore implements ClaimingStore
+{
+    /** @var list<string> */
+    public array $remembered = [];
+
+    /** @var list<string> */
+    public array $released = [];
+
+    public function __construct(
+        private bool $claimGranted,
+        private bool $seen,
+    ) {
+    }
+
+    public function seen(string $messageId): bool
+    {
+        return $this->seen;
+    }
+
+    public function claim(string $messageId, int $ttlSeconds): bool
+    {
+        return $this->claimGranted;
+    }
+
+    public function release(string $messageId): void
+    {
+        $this->released[] = $messageId;
+    }
+
+    public function remember(string $messageId): void
+    {
+        $this->remembered[] = $messageId;
+    }
+
+    public function forget(string $messageId): void
+    {
     }
 }

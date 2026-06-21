@@ -181,6 +181,54 @@ messages are republished to the DLQ as the **same** envelope plus an additive
 `dead_letter` block (`reason`, `error`, `failed_at`, `original_queue`,
 `attempts`, `lang`). Because the DLQ is an ordinary queue, any SDK can triage it.
 
+### Idempotent consumption (opt-in)
+
+Brokers deliver **at least once**: a redelivery after a missed ack — or a
+fan-out — can hand a consumer the *same* message twice. Enable idempotency to
+dedupe deliveries on the envelope's canonical per-message identity, `meta.id`,
+so a duplicate delivery is a no-op and the first delivery runs the handler
+**exactly once**. It is off by default and never changes the wire envelope.
+
+Enable in `config/babelqueue.php`:
+
+```php
+'idempotency' => [
+    'enabled'    => true,
+    'store'      => 'redis',   // 'redis' | 'database' | 'memory'
+    'connection' => null,      // Redis/DB connection name (null = its default)
+    'ttl'        => 3600,      // in-flight claim TTL (seconds) — crash backstop
+],
+```
+
+The default backends are **Laravel-native** and reuse infrastructure you already
+run:
+
+- `redis` — over a Laravel Redis (predis) connection.
+- `database` — over a Laravel DB connection (PostgreSQL / MySQL / SQLite). Create
+  the table once at deploy time:
+  ```php
+  DB::connection(config('babelqueue.idempotency.connection'))
+      ->getPdo()
+      ->exec(\BabelQueue\Idempotency\PdoStore::ddl(config('babelqueue.idempotency.table')));
+  ```
+- `memory` — single-process only (tests / a lone worker); not shared, not
+  persistent.
+
+`redis` and `database` are **claiming** stores: when two workers receive the same
+`meta.id` concurrently, exactly one runs the handler and the other parks for
+redelivery — closing the in-flight window, not just deduping after success.
+
+It binds the php-sdk `IdempotencyStore` in the container, so you can rebind it to
+a custom store:
+
+```php
+$this->app->instance(\BabelQueue\Idempotency\IdempotencyStore::class, new MyStore());
+```
+
+A thrown handler leaves the id **unmarked**, so retry / DLQ still apply and a
+later delivery re-runs it. A message with no usable `meta.id` always runs
+(fail-open).
+
 ## Testing
 
 ```bash
