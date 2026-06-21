@@ -8,11 +8,15 @@ use BabelQueue\Consumer\BabelQueueDispatcher;
 use BabelQueue\Idempotency\IdempotencyStore;
 use BabelQueue\Idempotency\InMemoryStore;
 use BabelQueue\Idempotency\PdoStore;
+use BabelQueue\Idempotency\RedisStore;
+use BabelQueue\Producer\Publisher;
+use BabelQueue\Queue\BabelQueueArtemisQueue;
 use BabelQueue\Queue\BabelQueueRabbitQueue;
 use BabelQueue\Queue\BabelQueueRedisQueue;
 use BabelQueue\Queue\BabelQueueSqsQueue;
 use BabelQueue\Tests\TestCase;
 use Illuminate\Support\Facades\Queue;
+use InvalidArgumentException;
 
 /**
  * Proves the provider wires both polyglot drivers and the URN dispatcher into a
@@ -47,6 +51,13 @@ final class ServiceProviderTest extends TestCase
             'queue' => 'default',
         ]);
 
+        $app['config']->set('queue.connections.bq-artemis', [
+            'driver' => 'babelqueue-artemis',
+            'host' => '127.0.0.1',
+            'port' => 61613,
+            'queue' => 'default',
+        ]);
+
         $app['config']->set('babelqueue.handlers', [
             'urn:test:order' => \stdClass::class,
         ]);
@@ -65,6 +76,22 @@ final class ServiceProviderTest extends TestCase
     public function test_sqs_connection_resolves_to_the_polyglot_queue(): void
     {
         $this->assertInstanceOf(BabelQueueSqsQueue::class, Queue::connection('bq-sqs'));
+    }
+
+    public function test_artemis_connection_resolves_to_the_polyglot_queue(): void
+    {
+        // The connector hands the queue a lazy STOMP-client factory, so resolving the
+        // connection builds the driver without opening a socket to the broker.
+        $this->assertInstanceOf(BabelQueueArtemisQueue::class, Queue::connection('bq-artemis'));
+    }
+
+    public function test_publisher_is_a_singleton_built_from_config(): void
+    {
+        $first = $this->app->make(Publisher::class);
+        $second = $this->app->make(Publisher::class);
+
+        $this->assertInstanceOf(Publisher::class, $first);
+        $this->assertSame($first, $second, 'the producer facade service is a container singleton');
     }
 
     public function test_dispatcher_is_a_singleton_built_from_config(): void
@@ -108,6 +135,57 @@ final class ServiceProviderTest extends TestCase
         $store = $this->app->make(IdempotencyStore::class);
 
         $this->assertInstanceOf(PdoStore::class, $store);
+    }
+
+    public function test_idempotency_store_binds_the_redis_backend_over_a_predis_connection(): void
+    {
+        // Drive the 'redis' store onto a predis-backed Laravel Redis connection. predis
+        // connects lazily, so resolving client() never opens a socket — this exercises the
+        // factory's predis branch (and its ClientInterface guard) without a live Redis.
+        $this->app['config']->set('database.redis.client', 'predis');
+        $this->app['config']->set('database.redis.bqidem', [
+            'host' => '127.0.0.1',
+            'port' => 6379,
+            'database' => 0,
+        ]);
+        $this->app['config']->set('babelqueue.idempotency.store', 'redis');
+        $this->app['config']->set('babelqueue.idempotency.connection', 'bqidem');
+
+        $store = $this->app->make(IdempotencyStore::class);
+
+        $this->assertInstanceOf(RedisStore::class, $store);
+    }
+
+    public function test_idempotency_store_rejects_a_non_predis_redis_connection(): void
+    {
+        // The 'redis' store needs the predis ClientInterface (the one the reference transport
+        // shares). A phpredis-backed connection yields a different client, so the factory must
+        // fail fast rather than hand RedisStore an incompatible client. We rebind the redis
+        // manager to a fake whose client() is not a Predis\ClientInterface to drive that guard
+        // without requiring the phpredis extension.
+        $connection = \Mockery::mock();
+        $connection->shouldReceive('client')->andReturn(new \stdClass());
+
+        $redis = \Mockery::mock();
+        $redis->shouldReceive('connection')->andReturn($connection);
+
+        $this->app->instance('redis', $redis);
+        $this->app['config']->set('babelqueue.idempotency.store', 'redis');
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->app->make(IdempotencyStore::class);
+    }
+
+    public function test_idempotency_store_rejects_an_unknown_backend(): void
+    {
+        // An unrecognised store name is a misconfiguration, not a silent fallback: the
+        // factory throws so the app fails fast at resolve time.
+        $this->app['config']->set('babelqueue.idempotency.store', 'cassandra');
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->app->make(IdempotencyStore::class);
     }
 
     public function test_idempotency_store_is_a_custom_rebindable_singleton(): void

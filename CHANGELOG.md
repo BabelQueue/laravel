@@ -9,6 +9,15 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-06-21
+
+### Changed
+- Lifted test coverage for the idempotency wiring back above the 90% gate
+  (`PolyglotConsumedMessage` + the service-provider store factory) — tests only,
+  no functional change.
+
+## [1.3.0] - 2026-06-21
+
 ### Added
 - **Opt-in idempotent consumption** — a `babelqueue-*` worker can now dedupe redelivered
   messages on the envelope's canonical `meta.id`, so a duplicate delivery is a no-op and the
