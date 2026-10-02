@@ -9,6 +9,22 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-01
+
+### Changed
+- **Release workflow: Packagist credentials moved out of the URL.** The optional
+  "Notify Packagist" step now sends `Authorization: Bearer USERNAME:API_TOKEN`
+  (Packagist's documented scheme) to `https://packagist.org/api/update-package`
+  instead of passing `username` / `apiToken` as query parameters, so the token can
+  no longer surface in request logs, proxies or curl error output. Secret names are
+  unchanged (`PACKAGIST_USERNAME`, `PACKAGIST_TOKEN`).
+- Added `.github/dependabot.yml` (weekly `composer` and `github-actions` updates).
+
+### Tests
+- `PolyglotConsumedMessageTest` no longer puts the forbidden `meta.attempts` key in
+  its fixture, so it passes against `babelqueue/php-sdk` 1.17.0, which drops that key
+  on decode (K-15). No runtime change; the `^1.15.0` constraint already admits 1.17.0.
+
 ## [1.3.1] - 2026-06-21
 
 ### Changed

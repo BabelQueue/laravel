@@ -51,14 +51,14 @@ final class PolyglotConsumedMessageTest extends TestCase
         // envelope() is what the php-sdk runtime would re-publish to a DLQ; it must
         // round-trip the four canonical keys read off the underlying message.
         $adapter = new PolyglotConsumedMessage($this->polyglotMessage(
-            '{"job":"urn:babel:orders:process","trace_id":"tr-9","data":{"sku":"A1"},"meta":{"id":"m3","attempts":2}}'
+            '{"job":"urn:babel:orders:process","trace_id":"tr-9","data":{"sku":"A1"},"meta":{"id":"m3"}}'
         ));
 
         $this->assertSame([
             'job' => 'urn:babel:orders:process',
             'trace_id' => 'tr-9',
             'data' => ['sku' => 'A1'],
-            'meta' => ['id' => 'm3', 'attempts' => 2],
+            'meta' => ['id' => 'm3'],
         ], $adapter->envelope());
     }
 
