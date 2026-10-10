@@ -7,7 +7,6 @@ namespace BabelQueue\Queue;
 use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\ShouldQueuePolyglot;
 use BabelQueue\Queue\Jobs\BabelQueueSqsJob;
-use Illuminate\Queue\Jobs\SqsJob;
 use Illuminate\Queue\SqsQueue;
 
 /**
@@ -21,9 +20,10 @@ use Illuminate\Queue\SqsQueue;
  * decoding the body. Standard Laravel jobs pass straight through to the parent
  * {@see SqsQueue} (no attributes), so this stays a drop-in replacement.
  *
- * Consume: pop() reuses the parent's receive (visibility-timeout reservation) and
- * re-wraps the reserved {@see SqsJob} as a {@see BabelQueueSqsJob}, which parses
- * the URN envelope and routes it to a PHP handler.
+ * Consume: pop() performs the same visibility-timeout receive as the parent, but also
+ * requests the message attributes, version-gates on `bq-schema-version` (§3.7) and
+ * wraps the reserved message as a {@see BabelQueueSqsJob}, which parses the URN
+ * envelope and routes it to a PHP handler.
  */
 class BabelQueueSqsQueue extends SqsQueue
 {
@@ -67,23 +67,62 @@ class BabelQueueSqsQueue extends SqsQueue
     /**
      * Pop the next job, wrapped as a polyglot consume job.
      *
+     * The receive is the driver's own (not {@see SqsQueue::pop()}, which asks SQS for no message
+     * attributes): it requests `MessageAttributeNames = ['All']` so the §3.5 `bq-*` attributes come
+     * back, and applies the §3.7 `bq-schema-version` gate before the body is decoded. A rejected
+     * message still becomes a {@see BabelQueueSqsJob} (carrying the rejected version), so the
+     * {@see \BabelQueue\Consumer\BabelQueueDispatcher} quarantines it on the DLQ (or fails it) via
+     * its unsupported-schema-version path instead of handing it to a handler.
+     *
      * @param  string|null  $queue
      */
     public function pop($queue = null)
     {
-        $reserved = parent::pop($queue);
+        $response = $this->sqs->receiveMessage([
+            'QueueUrl' => $queue = $this->getQueue($queue),
+            'AttributeNames' => ['ApproximateReceiveCount'],
+            'MessageAttributeNames' => ['All'],
+        ]);
 
-        if (! $reserved instanceof SqsJob) {
-            return $reserved;
+        if (is_null($response['Messages']) || count($response['Messages']) === 0) {
+            return null;
         }
+
+        $message = $response['Messages'][0];
+
+        $attribute = $message['MessageAttributes']['bq-schema-version']['StringValue'] ?? null;
 
         return new BabelQueueSqsJob(
             $this->container,
             $this->sqs,
-            $reserved->getSqsJob(),
+            $message,
             $this->connectionName,
-            $reserved->getQueue(),
+            $queue,
+            self::unsupportedSchemaVersion($attribute),
         );
+    }
+
+    /**
+     * The `bq-schema-version` attribute value when it is present, non-blank and not the supported
+     * version (exact string match against {@see EnvelopeCodec::SCHEMA_VERSION}); null when the body
+     * may be decoded.
+     */
+    private static function unsupportedSchemaVersion(mixed $value): ?string
+    {
+        if (! is_string($value) || self::isBlankASCII($value)) {
+            return null;
+        }
+
+        return $value === (string) EnvelopeCodec::SCHEMA_VERSION ? null : $value;
+    }
+
+    /**
+     * Blank means the empty string or only ASCII whitespace (space, `\t`, `\n`, `\v`, `\f`, `\r`) — the
+     * same set in every SDK (GR-5); not `trim()`, whose default set contains `\0` and lacks `\f`.
+     */
+    private static function isBlankASCII(string $value): bool
+    {
+        return preg_match('/\A[ \t\n\x0B\f\r]*\z/', $value) === 1;
     }
 
     /**

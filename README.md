@@ -183,6 +183,17 @@ worker's retry / `failed_jobs` path records it.
 > queue or connection instead. (Before this change they were deleted without a
 > trace.)
 
+### SQS: `bq-schema-version` message attribute
+
+The `babelqueue-sqs` driver requests the message attributes on every receive
+(`MessageAttributeNames = ['All']`) and checks `bq-schema-version` **before**
+the body is decoded (broker-bindings §3.5 / §3.7). A missing or blank attribute
+(empty or ASCII whitespace only) falls through to the normal path, where
+`meta.schema_version` is checked as above. Any other value that is not exactly
+`1` is never decoded and never reaches a handler: it takes the same
+`poison` DLQ / `InvalidEnvelopeException` route as an unsupported
+`meta.schema_version`.
+
 ### Dead-letter queue (cross-language)
 
 Enable in `config/babelqueue.php`:

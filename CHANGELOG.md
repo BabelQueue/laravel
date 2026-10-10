@@ -9,6 +9,24 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+MINOR (when released): new public API on `BabelQueueSqsJob` alongside the fix below. The envelope stays at
+`schema_version: 1`.
+
+### Added
+- `BabelQueueSqsJob::UNSUPPORTED_SCHEMA_URN_PREFIX` (`babelqueue:unsupported-schema-version:`), the reserved routing
+  URN prefix of a message rejected by the SQS schema-version gate.
+- `BabelQueueSqsJob` takes an optional trailing `?string $rejectedSchemaVersion` constructor argument (the
+  rejected `bq-schema-version` value; default `null`). Additive; existing callers are unaffected.
+
+### Fixed
+- **`babelqueue-sqs` now honours the `bq-schema-version` message attribute (broker-bindings §3.5 / §3.7).**
+  The driver never asked SQS for message attributes, so the version gate could not run. `pop()` now makes its
+  own `receiveMessage` call with `MessageAttributeNames = ['All']` and checks the attribute **before** the body
+  is decoded: missing or blank (empty / ASCII whitespace only) takes the normal path, any other value that is
+  not exactly `"1"` is rejected without decoding and goes through the dispatcher's unsupported-schema-version
+  path (DLQ `poison` + ack, or `InvalidEnvelopeException`). Standard Laravel queues are unaffected.
+  Needs no newer `babelqueue/php-sdk` than the current `^1.17.0` constraint.
+
 ## [1.4.0] - 2026-10-10
 
 MINOR: the schema-version gate under Changed is a behaviour change for shared queues; read it before upgrading.
