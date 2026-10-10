@@ -9,7 +9,9 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
-MINOR (when released): new public API on `BabelQueueSqsJob` alongside the fix below. The envelope stays at
+## [1.5.0] - 2026-10-10
+
+MINOR: new public API on `BabelQueueSqsJob` alongside the fix below. The envelope stays at
 `schema_version: 1`.
 
 ### Added
