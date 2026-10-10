@@ -9,6 +9,10 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-10
+
+MINOR: the schema-version gate under Changed is a behaviour change for shared queues; read it before upgrading.
+
 ### Fixed
 - **Absent or unsupported `meta.schema_version` is now rejected on consume.** The dispatcher used
   to hand an envelope with a `schema_version` other than `1` (or none) to the handler. Per the
