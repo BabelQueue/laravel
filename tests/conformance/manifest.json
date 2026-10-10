@@ -1,0 +1,509 @@
+{
+  "schema_version": 1,
+  "description": "Cross-SDK conformance cases. Every BabelQueue SDK core must satisfy these against the canonical wire envelope. Per-message fields (meta.id, trace_id, meta.created_at) are intrinsically unique and are NOT asserted by value.",
+  "cases": [
+    {
+      "name": "order-created",
+      "file": "fixtures/order-created.json",
+      "valid": true,
+      "description": "A normal produced envelope.",
+      "expect": {
+        "urn": "urn:babel:orders:created",
+        "data": { "order_id": 1042 },
+        "attempts": 0,
+        "lang": "php",
+        "schema_version": 1
+      }
+    },
+    {
+      "name": "urn-alias",
+      "file": "fixtures/urn-alias.json",
+      "valid": true,
+      "description": "Consumers MUST accept 'urn' as an inbound alias for 'job'.",
+      "expect": {
+        "urn": "urn:babel:orders:created",
+        "data": { "order_id": 1042 },
+        "attempts": 0,
+        "lang": "go",
+        "schema_version": 1
+      }
+    },
+    {
+      "name": "dead-lettered",
+      "file": "fixtures/dead-lettered.json",
+      "valid": true,
+      "description": "A dead-lettered message: original preserved + additive dead_letter block.",
+      "expect": {
+        "urn": "urn:babel:orders:created",
+        "data": { "order_id": 1042 },
+        "attempts": 3,
+        "lang": "php",
+        "schema_version": 1,
+        "dead_letter": { "reason": "failed", "original_queue": "orders" }
+      }
+    },
+    {
+      "name": "unicode-and-numbers",
+      "file": "fixtures/unicode-and-numbers.json",
+      "valid": true,
+      "description": "UTF-8 strings, integers, an exact float, boolean and null round-trip identically.",
+      "expect": {
+        "urn": "urn:babel:catalog:item.indexed",
+        "data": { "title": "Café — naïve ☕", "qty": 7, "price_cents": 1299, "ratio": 0.5, "active": true, "note": null },
+        "attempts": 2,
+        "lang": "python",
+        "schema_version": 1
+      }
+    },
+    {
+      "name": "invalid-unknown-schema-version",
+      "file": "fixtures/invalid-unknown-schema-version.json",
+      "valid": false,
+      "reason": "meta.schema_version is not a version this SDK supports"
+    },
+    {
+      "name": "invalid-missing-urn",
+      "file": "fixtures/invalid-missing-urn.json",
+      "valid": false,
+      "reason": "no 'job' or 'urn' — the message has no identity"
+    }
+  ],
+  "idempotency": {
+    "description": "Consumer idempotency conformance (ADR-0022). Broker-free: locks the seen-set dedupe contract every SDK's optional idempotency helper (Go idempotency.Wrap, PHP Idempotent::wrap, Python idempotency.wrap, Node Wrap, Java Idempotent.wrap) MUST honour over the frozen schema_version-1 envelope, independent of any transport. The helper does NOT touch the wire envelope — the cases above stay byte-identical; this block governs the consume-side decision (run the handler, or skip-and-ack) keyed on meta.id.",
+    "dedup_key": {
+      "description": "The dedupe key is meta.id verbatim — the canonical per-message identity (distinct from trace_id, which spans a causal chain). A consumer MUST key its seen-set on exactly fixtures/order-created.json's meta.id; two deliveries with the same meta.id are the SAME message (a redelivery), even byte-for-byte identical, and dedupe to one effect. trace_id is NOT the key: messages sharing a trace_id but with distinct meta.id are distinct effects.",
+      "envelope_file": "fixtures/order-created.json",
+      "key_field": "meta.id",
+      "expected_key": "f1e2d3c4-b5a6-4789-90ab-cdef01234567"
+    },
+    "sequences": {
+      "description": "Each sequence drives ONE handler wrapped by the SDK's idempotency helper, backed by ONE seen-set store, through an ordered list of deliveries. For each delivery the SDK MUST derive the effect: 'run' = the wrapped handler is invoked (the side-effect fires) and, on its outcome 'ok', the id is remembered; 'skip' = an already-remembered id is recognised, the handler is NOT invoked, and the delivery is acked (the runtime stops redelivering). 'outcome' is the handler's result for a 'run' delivery: 'ok' = returns/acks (remembered), 'throw' = raises/errors (the id is left UNMARKED so a later redelivery runs it again — retry/DLQ still apply). After replaying the whole sequence, total 'run'+'ok' invocations MUST equal expected_effects. This is at-least-once delivery collapsed to an exactly-once EFFECT by the consumer; it is seen-set post-success dedupe, NOT exactly-once delivery and NOT an in-flight concurrency lock.",
+      "cases": [
+        {
+          "name": "duplicate-delivery-runs-once",
+          "description": "The same meta.id delivered twice (a textbook at-least-once redelivery): first runs the effect, second is skipped. One effect.",
+          "deliveries": [
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "ok" },
+            { "meta_id": "id-A", "expect_effect": "skip" }
+          ],
+          "expected_effects": 1
+        },
+        {
+          "name": "at-least-once-redelivery-is-noop",
+          "description": "Three redeliveries of one id (a flaky broker / worker-crash-before-ack storm): the effect fires once; every subsequent redelivery is a no-op skip.",
+          "deliveries": [
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "ok" },
+            { "meta_id": "id-A", "expect_effect": "skip" },
+            { "meta_id": "id-A", "expect_effect": "skip" },
+            { "meta_id": "id-A", "expect_effect": "skip" }
+          ],
+          "expected_effects": 1
+        },
+        {
+          "name": "distinct-ids-each-run",
+          "description": "Different meta.ids are different messages — each runs once. Dedupe is per-id, never collapses unrelated messages.",
+          "deliveries": [
+            { "meta_id": "id-A", "expect_effect": "run", "outcome": "ok" },
+            { "meta_id": "id-B", "expect_effect": "run", "outcome": "ok" },
+            { "meta_id": "id-C", "expect_effect": "run", "outcome": "ok" }
+          ],
+          "expected_effects": 3
+        },
+        {
+          "name": "throw-leaves-id-unmarked",
+          "description": "A handler that throws does NOT remember the id, so the next redelivery runs it again (retry semantics survive the guard). The third delivery succeeds and is then deduped on a fourth.",
+          "deliveries": [
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "throw" },
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "throw" },
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "ok" },
+            { "meta_id": "id-A", "expect_effect": "skip" }
+          ],
+          "expected_effects": 3
+        },
+        {
+          "name": "missing-id-fails-open",
+          "description": "A message with no usable meta.id (empty/absent) CANNOT be deduped, so the helper fails open: every delivery runs the handler. The guard never silently drops work it cannot identify.",
+          "deliveries": [
+            { "meta_id": "", "expect_effect": "run", "outcome": "ok" },
+            { "meta_id": "", "expect_effect": "run", "outcome": "ok" }
+          ],
+          "expected_effects": 2
+        },
+        {
+          "name": "forget-allows-rerun",
+          "description": "forget(id) evicts an id from the seen-set, so a later delivery of that id runs again (manual replay / TTL expiry). Locks the third Store method.",
+          "deliveries": [
+            { "meta_id": "id-A", "expect_effect": "run",  "outcome": "ok" },
+            { "meta_id": "id-A", "expect_effect": "skip" },
+            { "meta_id": "id-A", "forget_before": true, "expect_effect": "run", "outcome": "ok" }
+          ],
+          "expected_effects": 2
+        }
+      ]
+    }
+  },
+  "sqs": {
+    "description": "Amazon SQS binding conformance (broker-bindings.md §3). Every SDK that ships an SQS transport must satisfy these. The envelope body stays byte-identical (the 'cases' above); these lock the native projection + reconciliation the binding adds. Per-message values reuse fixtures/order-created.json so the expected attributes are deterministic.",
+    "attribute_projection": {
+      "description": "On produce, the transport MUST project these native MessageAttributes from the envelope (a redundant, routable view of the body; ids/strings are DataType String, counters are DataType Number). Applies to every SQS-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "message_attributes": {
+        "bq-job":            { "DataType": "String", "StringValue": "urn:babel:orders:created" },
+        "bq-trace-id":       { "DataType": "String", "StringValue": "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b" },
+        "bq-message-id":     { "DataType": "String", "StringValue": "f1e2d3c4-b5a6-4789-90ab-cdef01234567" },
+        "bq-schema-version": { "DataType": "Number", "StringValue": "1" },
+        "bq-source-lang":    { "DataType": "String", "StringValue": "php" },
+        "bq-created-at":     { "DataType": "Number", "StringValue": "1749132727000" }
+      }
+    },
+    "attempts_reconciliation": {
+      "description": "On consume, attempts = max(body.attempts, ApproximateReceiveCount - 1): a first delivery reads 0, an absent/garbage count is ignored, a runtime-incremented count is never lowered. Applies to SDKs that reconcile the envelope body on consume (the framework-less/runtime transports). A drop-in driver that surfaces the broker's native delivery count instead (e.g. Laravel's SqsJob.attempts() = ApproximateReceiveCount) is exempt — it documents that divergence.",
+      "cases": [
+        { "name": "first-delivery",        "body_attempts": 0, "approximate_receive_count": "1",            "expected_attempts": 0 },
+        { "name": "third-delivery",        "body_attempts": 0, "approximate_receive_count": "3",            "expected_attempts": 2 },
+        { "name": "native-exceeds-body",   "body_attempts": 2, "approximate_receive_count": "5",            "expected_attempts": 4 },
+        { "name": "never-lower-runtime",   "body_attempts": 5, "approximate_receive_count": "1",            "expected_attempts": 5 },
+        { "name": "garbage-count-ignored", "body_attempts": 4, "approximate_receive_count": "not-a-number", "expected_attempts": 4 },
+        { "name": "absent-count",          "body_attempts": 3, "approximate_receive_count": null,           "expected_attempts": 3 }
+      ]
+    }
+  },
+  "asb": {
+    "description": "Azure Service Bus binding conformance (broker-bindings.md §4). Every SDK that ships an ASB transport must satisfy these. The envelope body stays byte-identical (the 'cases' above); these lock the native projection + reconciliation the binding adds. Per-message values reuse fixtures/order-created.json so the expected projection is deterministic.",
+    "property_projection": {
+      "description": "On produce, the transport MUST project these native Service Bus message fields from the envelope: Subject = job (the URN), CorrelationId = trace_id, MessageId = meta.id, ContentType = application/json, plus the bq- ApplicationProperties as native AMQP-typed values (numbers stay numbers, not strings). Applies to every ASB-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "message": {
+        "subject":        "urn:babel:orders:created",
+        "correlation_id": "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b",
+        "message_id":     "f1e2d3c4-b5a6-4789-90ab-cdef01234567",
+        "content_type":   "application/json"
+      },
+      "application_properties": {
+        "bq-schema-version": 1,
+        "bq-source-lang":    "php",
+        "bq-created-at":     1749132727000
+      }
+    },
+    "attempts_reconciliation": {
+      "description": "On consume, attempts = max(body.attempts, DeliveryCount - 1): a first delivery (DeliveryCount 1) reads 0, a runtime-incremented body count is never lowered, and DeliveryCount <= 1 leaves the body's own count untouched (the runtime retries by republishing with attempts+1). DeliveryCount is the native 1-based ASB redelivery counter; the rule is identical across the native-consumer SDKs (.NET/Java/Node) and the Transport+App SDKs (Python/Go).",
+      "cases": [
+        { "name": "first-delivery",            "body_attempts": 0, "delivery_count": 1, "expected_attempts": 0 },
+        { "name": "third-delivery",            "body_attempts": 0, "delivery_count": 3, "expected_attempts": 2 },
+        { "name": "native-exceeds-body",       "body_attempts": 2, "delivery_count": 5, "expected_attempts": 4 },
+        { "name": "never-lower-runtime",       "body_attempts": 5, "delivery_count": 2, "expected_attempts": 5 },
+        { "name": "first-delivery-keeps-body", "body_attempts": 4, "delivery_count": 1, "expected_attempts": 4 },
+        { "name": "zero-count-keeps-body",     "body_attempts": 3, "delivery_count": 0, "expected_attempts": 3 }
+      ]
+    }
+  },
+  "pulsar": {
+    "description": "Apache Pulsar binding conformance (broker-bindings.md §5). Every SDK that ships a Pulsar transport must satisfy these. The envelope body stays byte-identical (the 'cases' above); these lock the native projection + reconciliation the binding adds. Per-message values reuse fixtures/order-created.json so the expected projection is deterministic.",
+    "property_projection": {
+      "description": "On produce, the transport MUST project these native Pulsar message properties from the envelope, all string->string (Pulsar properties are string-typed, so numbers are stringified): bq-job = job (the URN), bq-trace-id = trace_id, bq-message-id = meta.id, bq-schema-version = str(meta.schema_version), bq-source-lang = meta.lang, bq-attempts = str(attempts). The payload is the byte-identical envelope; the native publishTime mirrors meta.created_at (broker-set, body authoritative). Applies to every Pulsar-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "properties": {
+        "bq-job":            "urn:babel:orders:created",
+        "bq-trace-id":       "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b",
+        "bq-message-id":     "f1e2d3c4-b5a6-4789-90ab-cdef01234567",
+        "bq-schema-version": "1",
+        "bq-source-lang":    "php",
+        "bq-attempts":       "0"
+      }
+    },
+    "attempts_reconciliation": {
+      "description": "On consume, attempts = max(body.attempts, RedeliveryCount): Pulsar's RedeliveryCount is 0-based (0 on first delivery) so it maps directly with NO -1, a runtime-incremented body count is never lowered, and RedeliveryCount 0 leaves the body's own count untouched (the runtime retries by republishing with attempts+1, which resets the broker's redelivery count to 0). The rule is identical across the native-consumer SDKs (.NET/Java/Node) and the Transport+App SDKs (Python/Go).",
+      "cases": [
+        { "name": "first-delivery",            "body_attempts": 0, "redelivery_count": 0, "expected_attempts": 0 },
+        { "name": "third-delivery",            "body_attempts": 0, "redelivery_count": 2, "expected_attempts": 2 },
+        { "name": "native-exceeds-body",       "body_attempts": 2, "redelivery_count": 5, "expected_attempts": 5 },
+        { "name": "never-lower-runtime",       "body_attempts": 5, "redelivery_count": 1, "expected_attempts": 5 },
+        { "name": "first-delivery-keeps-body", "body_attempts": 4, "redelivery_count": 0, "expected_attempts": 4 },
+        { "name": "native-equals-body",        "body_attempts": 3, "redelivery_count": 3, "expected_attempts": 3 }
+      ]
+    }
+  },
+  "kafka": {
+    "description": "Apache Kafka binding conformance (broker-bindings.md §6). Every SDK that ships a Kafka transport must satisfy these. The record value is the byte-identical envelope (the 'cases' above); these lock the bq- header projection + the bq-attempts-authoritative reconciliation the binding adds. Per-message values reuse fixtures/order-created.json so the expected projection is deterministic.",
+    "property_projection": {
+      "description": "On produce, the transport MUST project these native Kafka record headers from the envelope, all UTF-8 byte strings (Kafka headers are bytes, so integers are stringified): bq-job = job (the URN), bq-trace-id = trace_id, bq-message-id = meta.id, bq-schema-version = str(meta.schema_version), bq-source-lang = meta.lang, bq-attempts = str(attempts). The record value is the byte-identical envelope and the record timestamp mirrors meta.created_at (Unix ms). Applies to every Kafka-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "headers": {
+        "bq-job":            "urn:babel:orders:created",
+        "bq-trace-id":       "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b",
+        "bq-message-id":     "f1e2d3c4-b5a6-4789-90ab-cdef01234567",
+        "bq-schema-version": "1",
+        "bq-source-lang":    "php",
+        "bq-attempts":       "0"
+      }
+    },
+    "attempts_reconciliation": {
+      "description": "On consume, attempts = the bq-attempts header when present (AUTHORITATIVE — Kafka has no native delivery count), else the body's own attempts (the fallback for a non-BabelQueue producer). This is NOT a max: the header overrides the body even when lower. A null header_attempts means the header is absent. The rule is identical across all five Kafka SDKs.",
+      "cases": [
+        { "name": "header-matches-body",            "body_attempts": 0, "header_attempts": 0,    "expected_attempts": 0 },
+        { "name": "header-present",                 "body_attempts": 0, "header_attempts": 2,    "expected_attempts": 2 },
+        { "name": "header-absent-falls-back",       "body_attempts": 3, "header_attempts": null, "expected_attempts": 3 },
+        { "name": "header-authoritative-overrides", "body_attempts": 5, "header_attempts": 1,    "expected_attempts": 1 },
+        { "name": "header-higher-than-body",        "body_attempts": 1, "header_attempts": 4,    "expected_attempts": 4 }
+      ]
+    }
+  },
+  "artemis": {
+    "description": "Apache ActiveMQ Artemis binding conformance (broker-bindings.md §7). Every SDK that ships an Artemis transport must satisfy these. The message body stays byte-identical (the 'cases' above); these lock the AMQP-1.0 projection + reconciliation the binding adds. Per-message values reuse fixtures/order-created.json so the expected projection is deterministic.",
+    "property_projection": {
+      "description": "On produce, the transport MUST project the envelope onto the AMQP a JMS peer reads: the x-opt-jms-type message annotation = job (the URN, the AMQP-JMS mapping of JMSType), correlation-id = trace_id (JMSCorrelationID), creation-time = meta.created_at (JMSTimestamp, Unix ms), plus the bq_ application properties, all string-valued. The names use UNDERSCORES (bq_schema_version, not bq-schema-version): JMS property names must be valid Java identifiers (no hyphens), and the Java binding consumes/produces over JMS, so every Artemis SDK uses the JMS-legal underscore form for cross-protocol parity. bq_schema_version = str(meta.schema_version), bq_source_lang = meta.lang, bq_attempts = str(attempts), bq_app_id = 'babelqueue'. The body is the byte-identical envelope. Unlike Kafka/Pulsar, the URN / trace_id / message-id are NOT bq_ properties — they ride the JMS-native slots. Applies to every Artemis-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "jms_type_annotation": "x-opt-jms-type",
+      "jms_type": "urn:babel:orders:created",
+      "correlation_id": "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b",
+      "properties": {
+        "bq_schema_version": "1",
+        "bq_source_lang":    "php",
+        "bq_attempts":       "0",
+        "bq_app_id":         "babelqueue"
+      }
+    },
+    "attempts_reconciliation": {
+      "description": "On consume, attempts = max(body.attempts, delivery-count): the AMQP delivery-count header is 0-based (0 on first delivery) so it maps directly with NO -1, a runtime-incremented body count is never lowered, and delivery-count 0 leaves the body's own count untouched (the runtime/App retries by republishing with attempts+1, which resets the broker's delivery-count to 0). The Java JMS binding reads the 1-based JMSXDeliveryCount and subtracts 1, arriving at the same 0-based attempts. The rule is identical across the native-consumer SDKs (.NET/Java/Node) and the Transport+App SDKs (Python/Go).",
+      "cases": [
+        { "name": "first-delivery",           "body_attempts": 0, "delivery_count": 0, "expected_attempts": 0 },
+        { "name": "third-delivery",            "body_attempts": 0, "delivery_count": 2, "expected_attempts": 2 },
+        { "name": "native-exceeds-body",       "body_attempts": 2, "delivery_count": 5, "expected_attempts": 5 },
+        { "name": "never-lower-runtime",       "body_attempts": 5, "delivery_count": 1, "expected_attempts": 5 },
+        { "name": "first-delivery-keeps-body", "body_attempts": 4, "delivery_count": 0, "expected_attempts": 4 },
+        { "name": "native-equals-body",        "body_attempts": 3, "delivery_count": 3, "expected_attempts": 3 }
+      ]
+    }
+  },
+  "redis": {
+    "description": "Redis binding conformance (broker-bindings.md §1 — the reliable-queue list pattern). Redis lists carry no native metadata, so there is NO property projection: the queue element IS the canonical envelope JSON, byte-for-byte, with NO wrapping (unlike BullMQ's job structure) and NO added fields. The reserve/ack reliability (Laravel's reserved-sorted-set vs the App runtimes' processing-list) and attempts handling are SDK-runtime-specific and proven by the live interop round-trip, not a static fixture. The one cross-SDK invariant locked here is payload identity.",
+    "payload_identity": {
+      "description": "On produce, the transport MUST store the envelope JSON byte-for-byte as the queue element (RPUSH / equivalent); on reserve it MUST return that element unchanged — no wrapping, no envelope mutation, no added metadata. A §1 SDK round-trips fixtures/order-created.json through produce→reserve and gets back the identical bytes. Applies to every Redis-producing SDK.",
+      "envelope_file": "fixtures/order-created.json"
+    }
+  },
+  "rabbitmq": {
+    "description": "RabbitMQ binding conformance (broker-bindings.md §2 — AMQP 0-9-1). The envelope body stays byte-identical (the 'cases' above); this locks the native AMQP-0-9-1 property projection every producer emits. NOTE: consume-side attempts handling is NOT in scope here because it is runtime-specific — the Laravel driver reads the authoritative x-attempts header (§2.5), while the App-runtime SDKs (Go/Python) keep attempts in the body and republish with attempts+1 (the x-attempts header is then a redundant produce-side mirror). Both stay consistent because Laravel increments the body's attempts too. Per-message values reuse fixtures/order-created.json.",
+    "property_projection": {
+      "description": "On produce, the transport MUST project these native AMQP 0-9-1 properties + headers from the envelope. Header values are NATIVE-typed (AMQP 0-9-1 field-tables carry typed values — integers stay integers, NOT stringified like Kafka/Pulsar): type = job (the URN, route on it without reading the body), correlation_id = trace_id, message_id = meta.id, app_id = 'babelqueue', content_type = 'application/json', header x-schema-version = meta.schema_version (number), x-source-lang = meta.lang, x-attempts = attempts (number). The body is the byte-identical envelope. Applies to every RabbitMQ-producing SDK.",
+      "envelope_file": "fixtures/order-created.json",
+      "properties": {
+        "type":           "urn:babel:orders:created",
+        "correlation_id": "7b3f9c2a-e41d-4f88-9b2a-1c0d5e6f7a8b",
+        "message_id":     "f1e2d3c4-b5a6-4789-90ab-cdef01234567",
+        "app_id":         "babelqueue",
+        "content_type":   "application/json"
+      },
+      "headers": {
+        "x-schema-version": 1,
+        "x-source-lang":    "php",
+        "x-attempts":       0
+      }
+    }
+  },
+  "payload_schema": {
+    "description": "Per-URN data schema validation (ADR-0024). Each case validates `data` against `schema`; every SDK's optional payload validator (Go schema, PHP BabelQueue\\Schema, Python babelqueue.schema) MUST agree on `valid`. The wire envelope stays frozen — this governs the data block only, and is opt-in (consumers/producers without a registered schema skip it).",
+    "schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "required": ["order_id"],
+      "properties": {
+        "order_id": { "type": "integer", "minimum": 1 },
+        "amount": { "type": "number", "minimum": 0 },
+        "currency": { "enum": ["USD", "EUR", "TRY"] }
+      },
+      "additionalProperties": false
+    },
+    "cases": [
+      { "name": "valid-minimal", "valid": true, "data": { "order_id": 1042 } },
+      { "name": "valid-full", "valid": true, "data": { "order_id": 1042, "amount": 99.9, "currency": "USD" } },
+      { "name": "invalid-missing-required", "valid": false, "data": { "amount": 10 } },
+      { "name": "invalid-wrong-type", "valid": false, "data": { "order_id": "x" } },
+      { "name": "invalid-additional-property", "valid": false, "data": { "order_id": 1, "extra": true } },
+      { "name": "invalid-enum", "valid": false, "data": { "order_id": 1, "currency": "GBP" } },
+      { "name": "invalid-below-minimum", "valid": false, "data": { "order_id": 0 } }
+    ]
+  },
+  "roundtrip": {
+    "description": "Forward-compatible re-emit (message-envelope.md §4/§8: consumers MUST ignore unknown keys; GR-5). Each case is a decode -> attempts+1 -> encode chain, i.e. what every SDK does on retry/redrive/relay. Decode `file` with the SDK core (it MUST be accepted), increment `attempts` by one, re-encode, then parse the output JSON and assert: `attempts` == `expect_attempts`, and for every entry of `expect_preserved` the value at that RFC 6901 JSON pointer is deep-equal to the given value (same JSON type — an object is never an array). Unknown keys MUST NOT be dropped, renamed or retyped. Key order and whitespace are NOT asserted. `producer_schema_valid: false` marks a consumer-tolerance fixture that intentionally does not pass the producer JSON Schema (like urn-alias); the SDK MUST still accept and re-emit it.",
+    "cases": [
+      {
+        "name": "unknown-meta-roundtrip",
+        "file": "fixtures/unknown-meta-roundtrip.json",
+        "description": "Unknown meta keys (a scalar and a nested object) survive decode -> attempts+1 -> encode with the same values.",
+        "expect_attempts": 1,
+        "expect_preserved": {
+          "/meta/vendor_flag": true,
+          "/meta/vendor_ctx": {
+            "region": "eu-west-1",
+            "hops": [
+              1,
+              2
+            ]
+          },
+          "/meta/lang": "php"
+        }
+      },
+      {
+        "name": "unknown-toplevel-roundtrip",
+        "file": "fixtures/unknown-toplevel-roundtrip.json",
+        "description": "An unknown top-level key survives decode -> attempts+1 -> encode with the same value.",
+        "expect_attempts": 2,
+        "expect_preserved": {
+          "/extra_top": 1
+        }
+      },
+      {
+        "name": "unknown-lang",
+        "file": "fixtures/unknown-lang.json",
+        "description": "A meta.lang outside the known language list (a future/community SDK) is decoded without error and re-emitted unchanged — a consumer MUST NOT reject or rewrite it.",
+        "producer_schema_valid": false,
+        "expect_attempts": 1,
+        "expect_preserved": {
+          "/meta/lang": "cobol"
+        }
+      },
+      {
+        "name": "empty-data-roundtrip",
+        "file": "fixtures/empty-data-roundtrip.json",
+        "description": "An empty-object data survives the round-trip as an object ({}), never as an array ([]).",
+        "expect_attempts": 1,
+        "expect_preserved": {
+          "/data": {}
+        }
+      }
+    ]
+  },
+  "data_shape": {
+    "description": "The `data` block is always a JSON object (message-envelope.md §3, GR-3). `mode: encode` cases build a new envelope with the SDK's producer API from `urn` + `queue` + `data`, then assert the raw JSON text of the emitted `data` value, with insignificant whitespace removed, equals `expect_encoded_data_json` (an empty map MUST encode as {} — never []). `mode: decode` cases decode `file` and assert the SDK's verdict equals `valid` (`valid: false` = the core rejects it: accepts()/decode fails).",
+    "cases": [
+      {
+        "name": "empty-data",
+        "mode": "encode",
+        "urn": "urn:babel:orders:created",
+        "queue": "orders",
+        "data": {},
+        "expect_encoded_data_json": "{}"
+      },
+      {
+        "name": "data-array-rejected",
+        "mode": "decode",
+        "file": "fixtures/data-array-rejected.json",
+        "valid": false,
+        "reason": "data is a JSON array, not an object"
+      }
+    ]
+  },
+  "forbidden_keys": {
+    "description": "Non-canonical keys (message-envelope.md §10). Policy K-15 for R0: decode WARNS, it does not reject (old producers keep working); encode NEVER emits them. For each case: decode `file` — it MUST succeed (`expect: warn`) AND the SDK MUST surface at least one warning (via its logger / warning hook) naming `forbidden_key`. The forbidden key MUST NOT be captured into the unknown-key extras, so re-encoding the decoded message (no other change) MUST NOT contain any pointer in `expect_absent_after_reencode`. All other fields round-trip as usual.",
+    "cases": [
+      {
+        "name": "forbidden-key-timestamp",
+        "file": "fixtures/forbidden-key-timestamp.json",
+        "forbidden_key": "/timestamp",
+        "expect": "warn",
+        "expect_absent_after_reencode": [
+          "/timestamp"
+        ]
+      },
+      {
+        "name": "forbidden-key-meta-max-retries",
+        "file": "fixtures/forbidden-key-meta-max-retries.json",
+        "forbidden_key": "/meta/max_retries",
+        "expect": "warn",
+        "expect_absent_after_reencode": [
+          "/meta/max_retries"
+        ]
+      },
+      {
+        "name": "forbidden-key-meta-attempts",
+        "file": "fixtures/forbidden-key-meta-attempts.json",
+        "forbidden_key": "/meta/attempts",
+        "expect": "warn",
+        "expect_absent_after_reencode": [
+          "/meta/attempts"
+        ]
+      },
+      {
+        "name": "forbidden-key-meta-source",
+        "file": "fixtures/forbidden-key-meta-source.json",
+        "forbidden_key": "/meta/source",
+        "expect": "warn",
+        "expect_absent_after_reencode": [
+          "/meta/source"
+        ]
+      },
+      {
+        "name": "forbidden-key-meta-ts",
+        "file": "fixtures/forbidden-key-meta-ts.json",
+        "forbidden_key": "/meta/ts",
+        "expect": "warn",
+        "expect_absent_after_reencode": [
+          "/meta/ts"
+        ]
+      }
+    ]
+  },
+  "payload_schema_unicode": {
+    "description": "Unicode string length for minLength (ADR-0024, GR-5). Same shape as payload_schema: validate each case's `data` against `schema`; every SDK's payload validator MUST agree on `valid`. Length is the number of Unicode CODE POINTS — not UTF-8 bytes, not UTF-16 code units, not grapheme clusters. maxLength is intentionally absent: no SDK supports it yet (arrives with K-17 in R1).",
+    "schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "min3": {
+          "type": "string",
+          "minLength": 3
+        },
+        "min2": {
+          "type": "string",
+          "minLength": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "cases": [
+      {
+        "name": "ascii-3cp-min3",
+        "valid": true,
+        "data": {
+          "min3": "abc"
+        }
+      },
+      {
+        "name": "turkish-2cp-min3",
+        "valid": false,
+        "data": {
+          "min3": "ğü"
+        }
+      },
+      {
+        "name": "turkish-3cp-min3-boundary",
+        "valid": true,
+        "data": {
+          "min3": "ğüş"
+        }
+      },
+      {
+        "name": "emoji-1cp-min2",
+        "valid": false,
+        "data": {
+          "min2": "😀"
+        }
+      },
+      {
+        "name": "emoji-plus-ascii-2cp-min3",
+        "valid": false,
+        "data": {
+          "min3": "😀a"
+        }
+      },
+      {
+        "name": "combining-2cp-min2",
+        "valid": true,
+        "data": {
+          "min2": "e\u0301"
+        }
+      }
+    ]
+  }
+}

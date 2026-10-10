@@ -9,6 +9,45 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+### Fixed
+- **Absent or unsupported `meta.schema_version` is now rejected on consume.** The dispatcher used
+  to hand an envelope with a `schema_version` other than `1` (or none) to the handler. Per the
+  contract ("consumers MUST reject (or quarantine) versions they do not understand"; same rule as
+  the php-sdk core and the other SDKs) it is now never handled, **independent of
+  `on_unknown_urn`** (that setting is for URNs without a handler, not for versions): with the DLQ
+  enabled it is quarantined (reason `poison`) and acked; otherwise it throws
+  `InvalidEnvelopeException` (reason `unsupported_schema_version`) so the worker's retry /
+  `failed_jobs` path records it. It is never deleted without a trace.
+
+### Changed
+- **Behaviour change: the schema-version gate runs before URN routing, so `on_unknown_urn`
+  no longer sees messages with an absent or unsupported `meta.schema_version`.** Previously a
+  message on a `babelqueue-*` connection whose `job` was not mapped to a handler was handled by
+  `on_unknown_urn` regardless of its `meta`. Now, whenever `job` is non-empty and
+  `meta.schema_version` is not exactly `1`, the message is rejected before the handler lookup.
+  This affects shared queues: with `on_unknown_urn: delete` (or `release` / `dead_letter`),
+  messages that used to be silently dropped for being "unrelated" — a stock Laravel job pushed
+  onto the connection (`job: "Illuminate\\Queue\\CallQueuedHandler@call"`, no `meta`), or another
+  team's `schema_version: 2` message under a URN this service has no handler for — now surface:
+  with the DLQ enabled they are published to the configured DLQ (default `<queue>.dlq`) with reason `poison` (not
+  `unknown_urn`) and acked; with the DLQ disabled they throw `InvalidEnvelopeException`
+  (reason `unsupported_schema_version`) and follow the worker's retry / `failed_jobs` path.
+  No message is lost, but operators who relied on `delete` to swallow such traffic will see new
+  failures or DLQ entries. The default `fail` strategy already threw and is unchanged. To keep
+  unrelated traffic out, give this service its own queue or connection. An empty `job` (a
+  non-JSON body) still goes through `on_unknown_urn` as before.
+- Raised the `babelqueue/php-sdk` floor to `^1.17.0` (forbidden-key warnings, list-shaped `data`
+  rejection and `{}` encoding, K-15).
+
+### Tests / CI
+- **Cross-SDK conformance suite vendored and run through the adapter path.** The canonical
+  suite (`CONFORMANCE_VERSION`, `manifest.json`, `fixtures/`, `schema/` — v1.0.0) now lives
+  byte-for-byte under `tests/conformance/`. `tests/Feature/AdapterConformanceTest.php` feeds the
+  fixtures through the RabbitMQ and Redis job classes, the URN dispatcher and the RabbitMQ
+  producer/release path (decode, field preservation, re-emit, rejection of invalid cases).
+  A new `conformance` CI job verifies the vendored copy has not drifted from the canonical
+  repository and gates `ci-green`.
+
 ## [1.3.2] - 2026-10-03
 
 ### Changed

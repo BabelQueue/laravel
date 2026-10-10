@@ -165,6 +165,24 @@ php artisan queue:work bq-redis
 `config/babelqueue.php` → `on_unknown_urn`: `fail` (default) · `delete` ·
 `release` · `dead_letter`.
 
+`on_unknown_urn` applies to messages whose URN has no mapped handler and that pass
+the schema-version check (a body that is not JSON, and so has an empty `job`, also
+lands here). The `meta.schema_version` check runs **before** URN routing and is
+independent of this setting: an envelope whose `meta.schema_version` is absent or
+not `1` is never handed to a handler and never reaches `on_unknown_urn` — even
+with `delete`, `release` or `dead_letter`. With the dead-letter queue enabled it
+is published to the configured DLQ (default `<queue>.dlq`) with reason `poison` and acked; otherwise an
+`InvalidEnvelopeException` (`unsupported_schema_version`) is thrown so the
+worker's retry / `failed_jobs` path records it.
+
+> **Shared queues.** A queue that also carries traffic this service does not
+> own (for example a stock Laravel job pushed onto a `babelqueue-*` connection,
+> or another team's `schema_version: 2` messages) can no longer be silenced with
+> `on_unknown_urn: delete`: such messages used to be dropped silently and now
+> surface as `poison` DLQ entries or as failed jobs. Give this service its own
+> queue or connection instead. (Before this change they were deleted without a
+> trace.)
+
 ### Dead-letter queue (cross-language)
 
 Enable in `config/babelqueue.php`:

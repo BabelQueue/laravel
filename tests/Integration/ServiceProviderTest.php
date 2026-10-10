@@ -207,7 +207,7 @@ final class ServiceProviderTest extends TestCase
         ProviderCountingConsumer::$count = 0;
         $dispatcher = $this->app->make(BabelQueueDispatcher::class);
 
-        $body = '{"job":"urn:test:idem","data":{},"meta":{"id":"prov-dup"}}';
+        $body = '{"job":"urn:test:idem","data":{},"meta":{"schema_version":1,"id":"prov-dup"}}';
         $dispatcher->dispatch($this->polyglotMessage($body));
         $dispatcher->dispatch($this->polyglotMessage($body));
 
@@ -224,7 +224,7 @@ final class ServiceProviderTest extends TestCase
         ProviderCountingConsumer::$count = 0;
         $dispatcher = $this->app->make(BabelQueueDispatcher::class);
 
-        $body = '{"job":"urn:test:idem","data":{},"meta":{"id":"prov-dup"}}';
+        $body = '{"job":"urn:test:idem","data":{},"meta":{"schema_version":1,"id":"prov-dup"}}';
         $dispatcher->dispatch($this->polyglotMessage($body));
         $dispatcher->dispatch($this->polyglotMessage($body));
 

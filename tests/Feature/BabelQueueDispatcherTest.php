@@ -7,12 +7,14 @@ namespace BabelQueue\Tests\Feature;
 use BabelQueue\Consumer\BabelQueueDispatcher;
 use BabelQueue\Consumer\DeadLetterPublisher;
 use BabelQueue\Contracts\PolyglotMessage;
+use BabelQueue\Exceptions\InvalidEnvelopeException;
 use BabelQueue\Exceptions\UnknownUrnException;
 use BabelQueue\Idempotency\ClaimingStore;
 use BabelQueue\Idempotency\ClaimParkedException;
 use BabelQueue\Idempotency\InMemoryStore;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
 use BabelQueue\Tests\TestCase;
+use BabelQueue\Validation\EnvelopeValidator;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Contracts\Queue\Queue as QueueContract;
@@ -30,12 +32,12 @@ final class BabelQueueDispatcherTest extends TestCase
             'urn:babel:orders:process' => OrderConsumerStub::class,
         ]);
 
-        $message = $this->message('{"job":"urn:babel:orders:process","trace_id":"7b3f9c2a-e41d-4f88","data":{"order_id":7},"meta":{"id":"m1"}}');
+        $message = $this->message('{"job":"urn:babel:orders:process","trace_id":"7b3f9c2a-e41d-4f88","data":{"order_id":7},"meta":{"schema_version":1,"id":"m1"}}');
 
         $dispatcher->dispatch($message);
 
         $this->assertSame(['order_id' => 7], OrderConsumerStub::$received['data']);
-        $this->assertSame(['id' => 'm1'], OrderConsumerStub::$received['meta']);
+        $this->assertSame(['schema_version' => 1, 'id' => 'm1'], OrderConsumerStub::$received['meta']);
         $this->assertSame('7b3f9c2a-e41d-4f88', OrderConsumerStub::$received['traceId']);
         $this->assertTrue($message->isDeleted(), 'message should be acked on success');
     }
@@ -49,7 +51,7 @@ final class BabelQueueDispatcherTest extends TestCase
         ]);
 
         // A legacy/non-conformant envelope with no trace_id must not blow up.
-        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{}}'));
+        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1}}'));
 
         $this->assertSame('', OrderConsumerStub::$received['traceId']);
     }
@@ -59,12 +61,12 @@ final class BabelQueueDispatcherTest extends TestCase
         $this->expectException(UnknownUrnException::class);
 
         (new BabelQueueDispatcher($this->app, []))
-            ->dispatch($this->message('{"job":"urn:unknown","data":{},"meta":{}}'));
+            ->dispatch($this->message('{"job":"urn:unknown","data":{},"meta":{"schema_version":1}}'));
     }
 
     public function test_unknown_urn_can_be_dropped(): void
     {
-        $message = $this->message('{"job":"urn:unknown","data":{},"meta":{}}');
+        $message = $this->message('{"job":"urn:unknown","data":{},"meta":{"schema_version":1}}');
 
         (new BabelQueueDispatcher($this->app, [], 'delete'))->dispatch($message);
 
@@ -80,7 +82,7 @@ final class BabelQueueDispatcherTest extends TestCase
             'urn:babel:orders:process' => CountingConsumerStub::class,
         ]);
 
-        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"dup-1"}}';
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"dup-1"}}';
         $first = $this->message($body);
         $second = $this->message($body);
 
@@ -106,7 +108,7 @@ final class BabelQueueDispatcherTest extends TestCase
             new InMemoryStore(),
         );
 
-        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"dup-2"}}';
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"dup-2"}}';
         $first = $this->message($body);
         $second = $this->message($body);
 
@@ -132,8 +134,8 @@ final class BabelQueueDispatcherTest extends TestCase
             $store,
         );
 
-        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"a"}}'));
-        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"b"}}'));
+        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"a"}}'));
+        $dispatcher->dispatch($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"b"}}'));
 
         $this->assertSame(2, CountingConsumerStub::$count, 'distinct ids each run once');
     }
@@ -152,7 +154,7 @@ final class BabelQueueDispatcherTest extends TestCase
         );
 
         // No usable meta.id → cannot dedupe; every delivery runs (fail-open).
-        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{}}';
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1}}';
         $dispatcher->dispatch($this->message($body));
         $dispatcher->dispatch($this->message($body));
 
@@ -173,7 +175,7 @@ final class BabelQueueDispatcherTest extends TestCase
             $store,
         );
 
-        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"id":"retry-1"}}';
+        $body = '{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"retry-1"}}';
 
         // First delivery throws → the id is NOT remembered, the exception propagates (retry/DLQ apply).
         try {
@@ -207,7 +209,7 @@ final class BabelQueueDispatcherTest extends TestCase
             $store,
         );
 
-        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"inflight-1"}}');
+        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"inflight-1"}}');
 
         try {
             $dispatcher->dispatch($message);
@@ -234,7 +236,7 @@ final class BabelQueueDispatcherTest extends TestCase
             $store,
         );
 
-        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"id":"won-1"}}');
+        $message = $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1,"id":"won-1"}}');
         $dispatcher->dispatch($message);
 
         $this->assertSame(1, CountingConsumerStub::$count);
@@ -247,7 +249,7 @@ final class BabelQueueDispatcherTest extends TestCase
         OrderConsumerStub::$failed = false;
 
         (new BabelQueueDispatcher($this->app, ['urn:babel:orders:process' => OrderConsumerStub::class]))
-            ->fail($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{}}'), new RuntimeException('boom'));
+            ->fail($this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":1}}'), new RuntimeException('boom'));
 
         $this->assertTrue(OrderConsumerStub::$failed);
     }
@@ -258,7 +260,7 @@ final class BabelQueueDispatcherTest extends TestCase
         $dlq = $this->deadLetterPublisher($captured);
 
         (new BabelQueueDispatcher($this->app, [], 'fail', 0, $dlq))
-            ->fail($this->message('{"job":"urn:babel:orders:created","trace_id":"t1","data":{},"meta":{}}'), new RuntimeException('boom'));
+            ->fail($this->message('{"job":"urn:babel:orders:created","trace_id":"t1","data":{},"meta":{"schema_version":1}}'), new RuntimeException('boom'));
 
         $this->assertSame('failed', $captured['dead_letter']['reason']);
         $this->assertSame('t1', $captured['trace_id']);
@@ -270,11 +272,169 @@ final class BabelQueueDispatcherTest extends TestCase
         $captured = null;
         $dlq = $this->deadLetterPublisher($captured);
 
-        $message = $this->message('{"job":"urn:unknown","data":{},"meta":{}}');
+        $message = $this->message('{"job":"urn:unknown","data":{},"meta":{"schema_version":1}}');
 
         (new BabelQueueDispatcher($this->app, [], 'dead_letter', 0, $dlq))->dispatch($message);
 
         $this->assertSame('unknown_urn', $captured['dead_letter']['reason']);
+        $this->assertTrue($message->isDeleted());
+    }
+
+    private const UNSUPPORTED_VERSION_BODY = '{"job":"urn:babel:orders:created","data":{},"meta":{"schema_version":2}}';
+
+    public function test_unsupported_schema_version_is_rejected_by_default_and_never_handled(): void
+    {
+        $handled = false;
+        $this->app->bind('SchemaVersionProbe', function () use (&$handled) {
+            return new class($handled) {
+                public function __construct(private bool &$handled)
+                {
+                }
+
+                public function handle(): void
+                {
+                    $this->handled = true;
+                }
+            };
+        });
+
+        $message = $this->message(self::UNSUPPORTED_VERSION_BODY);
+
+        try {
+            (new BabelQueueDispatcher($this->app, ['urn:babel:orders:created' => 'SchemaVersionProbe']))->dispatch($message);
+            $this->fail('an unsupported schema_version must be rejected');
+        } catch (InvalidEnvelopeException $e) {
+            $this->assertSame(EnvelopeValidator::REASON_UNSUPPORTED_SCHEMA_VERSION, $e->reason());
+        }
+
+        $this->assertFalse($handled);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function versionlessBodies(): array
+    {
+        return [
+            'unsupported version' => [self::UNSUPPORTED_VERSION_BODY],
+            'schema_version absent' => ['{"job":"urn:babel:orders:created","data":{},"meta":{"id":"x"}}'],
+            'meta absent' => ['{"job":"urn:babel:orders:created","data":{}}'],
+            'schema_version wrong type' => ['{"job":"urn:babel:orders:created","data":{},"meta":{"schema_version":"1"}}'],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('versionlessBodies')]
+    public function test_absent_or_unsupported_schema_version_is_rejected_and_never_handled(string $body): void
+    {
+        OrderConsumerStub::$received = [];
+
+        $message = $this->message($body);
+
+        try {
+            (new BabelQueueDispatcher($this->app, ['urn:babel:orders:created' => OrderConsumerStub::class]))->dispatch($message);
+            $this->fail('a message without a supported schema_version must be rejected');
+        } catch (InvalidEnvelopeException $e) {
+            $this->assertSame(EnvelopeValidator::REASON_UNSUPPORTED_SCHEMA_VERSION, $e->reason());
+        }
+
+        $this->assertSame([], OrderConsumerStub::$received);
+        $this->assertFalse($message->isDeleted());
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('strategies')]
+    public function test_version_rejection_ignores_on_unknown_urn_and_leaves_a_trace_without_dlq(string $strategy): void
+    {
+        $message = $this->message(self::UNSUPPORTED_VERSION_BODY);
+
+        try {
+            (new BabelQueueDispatcher($this->app, [], $strategy))->dispatch($message);
+            $this->fail('the version gate must throw whatever on_unknown_urn says');
+        } catch (InvalidEnvelopeException) {
+            // Visible failure: the worker records it; the message is neither acked nor released.
+        }
+
+        $this->assertFalse($message->isDeleted(), 'must not be silently dropped');
+        $this->assertFalse($message->isReleased(), 'must not loop through redelivery');
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function strategies(): array
+    {
+        return [['fail'], ['delete'], ['release'], ['dead_letter']];
+    }
+
+    public function test_dead_letter_strategy_with_dlq_disabled_is_rejected_not_dropped(): void
+    {
+        $factory = Mockery::mock(QueueFactory::class);
+        $factory->shouldNotReceive('connection');
+        $disabled = new DeadLetterPublisher($factory, ['enabled' => false]);
+
+        $message = $this->message(self::UNSUPPORTED_VERSION_BODY);
+
+        $this->expectException(InvalidEnvelopeException::class);
+
+        try {
+            (new BabelQueueDispatcher($this->app, [], 'dead_letter', 0, $disabled))->dispatch($message);
+        } finally {
+            $this->assertFalse($message->isDeleted());
+        }
+    }
+
+    public function test_enabled_dlq_quarantines_a_version_rejection_even_with_delete_strategy(): void
+    {
+        $captured = null;
+        $dlq = $this->deadLetterPublisher($captured);
+
+        $message = $this->message(self::UNSUPPORTED_VERSION_BODY);
+
+        (new BabelQueueDispatcher($this->app, [], 'delete', 0, $dlq))->dispatch($message);
+
+        $this->assertSame('poison', $captured['dead_letter']['reason']);
+        $this->assertTrue($message->isDeleted());
+    }
+
+    public function test_enabled_dlq_quarantines_a_versionless_envelope_with_release_strategy(): void
+    {
+        $captured = null;
+        $dlq = $this->deadLetterPublisher($captured);
+
+        $message = $this->message('{"job":"urn:babel:orders:created","data":{},"meta":{"id":"x"}}');
+
+        (new BabelQueueDispatcher($this->app, [], 'release', 0, $dlq))->dispatch($message);
+
+        $this->assertSame('poison', $captured['dead_letter']['reason']);
+        $this->assertTrue($message->isDeleted());
+        $this->assertFalse($message->isReleased());
+    }
+
+    public function test_permanent_failure_of_an_unsupported_version_skips_the_handler_hook_but_still_dead_letters(): void
+    {
+        OrderConsumerStub::$failed = false;
+        $captured = null;
+        $dlq = $this->deadLetterPublisher($captured);
+
+        (new BabelQueueDispatcher($this->app, ['urn:babel:orders:process' => OrderConsumerStub::class], 'fail', 0, $dlq))
+            ->fail(
+                $this->message('{"job":"urn:babel:orders:process","data":{},"meta":{"schema_version":2}}'),
+                new RuntimeException('boom'),
+            );
+
+        $this->assertFalse(OrderConsumerStub::$failed, 'a handler that never ran gets no failed() hook');
+        $this->assertSame('failed', $captured['dead_letter']['reason']);
+    }
+
+    public function test_unsupported_schema_version_dead_letter_strategy_quarantines_and_acks(): void
+    {
+        $captured = null;
+        $dlq = $this->deadLetterPublisher($captured);
+
+        $message = $this->message(self::UNSUPPORTED_VERSION_BODY);
+
+        (new BabelQueueDispatcher($this->app, [], 'dead_letter', 0, $dlq))->dispatch($message);
+
+        $this->assertSame('poison', $captured['dead_letter']['reason']);
         $this->assertTrue($message->isDeleted());
     }
 

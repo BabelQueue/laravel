@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace BabelQueue\Consumer;
 
+use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\ConsumedMessage;
 use BabelQueue\Contracts\PolyglotMessage;
+use BabelQueue\Exceptions\InvalidEnvelopeException;
 use BabelQueue\Exceptions\UnknownUrnException;
 use BabelQueue\Idempotency\ClaimingDispatch;
 use BabelQueue\Idempotency\ClaimingStore;
 use BabelQueue\Idempotency\Idempotent;
 use BabelQueue\Idempotency\IdempotencyStore;
+use BabelQueue\Validation\EnvelopeValidator;
 use Illuminate\Contracts\Container\Container;
 use Throwable;
 
@@ -48,11 +51,25 @@ final class BabelQueueDispatcher
      * Resolve the handler for the message URN and run it. On success the
      * message is acknowledged (deleted) unless the handler already did so.
      *
+     * An envelope whose "meta.schema_version" is absent or not understood is never handed to a
+     * handler (contract: consumers MUST reject or quarantine such versions), whatever
+     * "on_unknown_urn" says: it is quarantined on the DLQ and acked when DLQ is enabled, else
+     * rejected with an {@see InvalidEnvelopeException}. It is never silently dropped.
+     *
      * @throws UnknownUrnException When no handler is mapped and the strategy is "fail".
+     * @throws InvalidEnvelopeException When the schema version is unsupported and DLQ is not enabled.
      */
     public function dispatch(PolyglotMessage $message): void
     {
         $urn = $message->getUrn();
+
+        // An empty URN (e.g. a non-JSON body) keeps its documented unknown-URN path
+        // (error-handling.md section 7); every routable envelope is version-gated first.
+        if ($urn !== '' && ! self::supportsSchemaVersion($message)) {
+            $this->handleUnsupportedSchemaVersion($message);
+
+            return;
+        }
 
         $handlerClass = $urn === '' ? null : ($this->handlers[$urn] ?? null);
 
@@ -129,6 +146,11 @@ final class BabelQueueDispatcher
     {
         $this->deadLetter()?->publish($message, 'failed', $e);
 
+        // An unsupported-version envelope never reached a handler, so there is no failed() hook to run.
+        if (! self::supportsSchemaVersion($message)) {
+            return;
+        }
+
         $handlerClass = $this->handlers[$message->getUrn()] ?? null;
 
         if ($handlerClass === null) {
@@ -149,6 +171,44 @@ final class BabelQueueDispatcher
             'e' => $e,
             'message' => $message,
         ]);
+    }
+
+    /**
+     * Whether the envelope may be processed: "meta.schema_version" MUST be present and equal the
+     * one version this SDK understands. An absent version is unsupported, exactly as in the php-sdk
+     * core ({@see EnvelopeValidator::check()}) and the other SDK cores.
+     */
+    private static function supportsSchemaVersion(PolyglotMessage $message): bool
+    {
+        return ($message->getMeta()['schema_version'] ?? null) === EnvelopeCodec::SCHEMA_VERSION;
+    }
+
+    /**
+     * Reject (or quarantine) an envelope with an unsupported or absent "meta.schema_version".
+     *
+     * This is deliberately independent of "on_unknown_urn": that strategy governs URNs this
+     * service has no handler for (error-handling.md section 3), and "delete"/"release" must not
+     * be able to silently drop or loop a message whose URN may well be routable but whose
+     * version we cannot read. Per error-handling.md section 7 the message is poison: it is
+     * quarantined on the DLQ (reason "poison") and acked when DLQ is enabled; otherwise it is
+     * rejected with a visible {@see InvalidEnvelopeException} so the worker's retry / failed_jobs
+     * path records it. It is never deleted without a trace.
+     */
+    private function handleUnsupportedSchemaVersion(PolyglotMessage $message): void
+    {
+        $deadLetter = $this->deadLetter();
+
+        if ($deadLetter !== null && $deadLetter->enabled()) {
+            $deadLetter->publish($message, 'poison');
+            $message->delete();
+
+            return;
+        }
+
+        throw InvalidEnvelopeException::because(
+            EnvelopeValidator::REASON_UNSUPPORTED_SCHEMA_VERSION,
+            ['job' => $message->getUrn(), 'trace_id' => $message->getTraceId(), 'meta' => $message->getMeta()],
+        );
     }
 
     /**
