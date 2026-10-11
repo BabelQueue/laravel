@@ -9,6 +9,8 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-11
+
 ### Fixed
 - `babelqueue-sqs` `pop()` now requests `ApproximateReceiveCount` via `MessageSystemAttributeNames` instead of
   `AttributeNames`. It is a message system attribute, not a queue attribute; the current AWS SDK types reject it
