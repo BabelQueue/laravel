@@ -9,6 +9,15 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+### Fixed
+- `babelqueue-sqs` `pop()` now requests `ApproximateReceiveCount` via `MessageSystemAttributeNames` instead of
+  `AttributeNames`. It is a message system attribute, not a queue attribute; the current AWS SDK types reject it
+  under `AttributeNames` (Larastan failure). The wire/SQS behaviour is unchanged — `Attributes['ApproximateReceiveCount']`
+  still comes back on each message.
+- `composer.json` now declares `"conflict": {"aws/aws-sdk-php": "<3.306.2"}`. Requires `aws/aws-sdk-php` >= 3.306.2
+  (where `MessageSystemAttributeNames` was introduced): an older SDK silently drops the unknown parameter, so SQS
+  would never return `ApproximateReceiveCount` and attempt counting would break (an `Undefined array key` error at `attempts()`, so the job is never failed or dead-lettered).
+
 ## [1.5.0] - 2026-10-10
 
 MINOR: new public API on `BabelQueueSqsJob` alongside the fix below. The envelope stays at

@@ -38,6 +38,9 @@
         "predis/predis": "^2.2 || ^3.0",
         "stomp-php/stomp-php": "^5.0"
     },
+    "conflict": {
+        "aws/aws-sdk-php": "<3.306.2"
+    },
     "suggest": {
         "aws/aws-sdk-php": "Required for the drop-in Amazon SQS driver (babelqueue-sqs).",
         "stomp-php/stomp-php": "Required for the drop-in Apache ActiveMQ Artemis driver (babelqueue-artemis), the §7 STOMP path."

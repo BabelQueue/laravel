@@ -68,7 +68,9 @@ class BabelQueueSqsQueue extends SqsQueue
      * Pop the next job, wrapped as a polyglot consume job.
      *
      * The receive is the driver's own (not {@see SqsQueue::pop()}, which asks SQS for no message
-     * attributes): it requests `MessageAttributeNames = ['All']` so the §3.5 `bq-*` attributes come
+     * attributes): it requests `MessageSystemAttributeNames = ['ApproximateReceiveCount']` (the
+     * attempt counter — a message *system* attribute, not a queue attribute) and
+     * `MessageAttributeNames = ['All']` so the §3.5 `bq-*` attributes come
      * back, and applies the §3.7 `bq-schema-version` gate before the body is decoded. A rejected
      * message still becomes a {@see BabelQueueSqsJob} (carrying the rejected version), so the
      * {@see \BabelQueue\Consumer\BabelQueueDispatcher} quarantines it on the DLQ (or fails it) via
@@ -80,7 +82,7 @@ class BabelQueueSqsQueue extends SqsQueue
     {
         $response = $this->sqs->receiveMessage([
             'QueueUrl' => $queue = $this->getQueue($queue),
-            'AttributeNames' => ['ApproximateReceiveCount'],
+            'MessageSystemAttributeNames' => ['ApproximateReceiveCount'],
             'MessageAttributeNames' => ['All'],
         ]);
 

@@ -135,7 +135,8 @@ final class BabelQueueSqsQueueTest extends TestCase
         $this->popOne(self::VALID_BODY, '1', $args);
 
         $this->assertSame(['All'], $args['MessageAttributeNames']);
-        $this->assertSame(['ApproximateReceiveCount'], $args['AttributeNames']);
+        $this->assertSame(['ApproximateReceiveCount'], $args['MessageSystemAttributeNames']);
+        $this->assertArrayNotHasKey('AttributeNames', $args);
         $this->assertSame(self::PREFIX.'/orders', $args['QueueUrl']);
     }
 
