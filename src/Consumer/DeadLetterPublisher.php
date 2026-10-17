@@ -8,7 +8,6 @@ use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\DeadLetter\DeadLetter;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
-use JsonException;
 use Throwable;
 
 /**
@@ -91,12 +90,8 @@ final class DeadLetterPublisher
      */
     private function decode(string $rawBody): array
     {
-        try {
-            $decoded = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return ['raw' => $rawBody];
-        }
+        $decoded = EnvelopeCodec::decode($rawBody);
 
-        return is_array($decoded) ? $decoded : ['raw' => $rawBody];
+        return $decoded !== [] ? $decoded : ['raw' => $rawBody];
     }
 }

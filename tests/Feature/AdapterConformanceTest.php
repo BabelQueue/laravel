@@ -231,9 +231,10 @@ final class AdapterConformanceTest extends TestCase
     // ------------------------------------------------------------------- retry
 
     /**
-     * On retry the RabbitMQ driver republishes the *same body bytes* and carries the attempt
-     * counter in the `x-attempts` header (broker-bindings.md §2), so every unknown key, the
-     * `{}` data block and an unknown `meta.lang` survive by construction.
+     * On retry the RabbitMQ driver republishes the body normalised through the core codec
+     * (decode -> encode, ADR-0031) and carries the attempt counter in the `x-attempts` header
+     * (broker-bindings.md §2), so every unknown key, the `{}` data block and an unknown
+     * `meta.lang` survive, and a `urn`-only body is re-emitted with `job`.
      */
     public function test_roundtrip_cases_survive_a_release_republish(): void
     {
@@ -263,7 +264,7 @@ final class AdapterConformanceTest extends TestCase
             $job->release();
 
             self::assertCount(1, $published, $name);
-            self::assertSame($body, $published[0]->getBody(), $name . ': body travels unchanged');
+            self::assertSame(\BabelQueue\Codec\EnvelopeCodec::encode(\BabelQueue\Codec\EnvelopeCodec::decode($body)), $published[0]->getBody(), $name . ': body is the codec-normalised envelope');
 
             /** @var AMQPTable $table */
             $table = $published[0]->get('application_headers');

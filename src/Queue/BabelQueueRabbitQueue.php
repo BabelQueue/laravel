@@ -7,6 +7,7 @@ namespace BabelQueue\Queue;
 use BabelQueue\Contracts\ShouldQueuePolyglot;
 use BabelQueue\Exceptions\BabelQueueException;
 use BabelQueue\Queue\Jobs\BabelQueueRabbitJob;
+use BabelQueue\Support\EnvelopeBody;
 use BabelQueue\Codec\EnvelopeCodec;
 use Closure;
 use Illuminate\Contracts\Queue\Job as JobContract;
@@ -191,7 +192,7 @@ class BabelQueueRabbitQueue extends Queue implements QueueContract
 
         $this->declareTopology($queue);
         $this->channel()->basic_publish(
-            new AMQPMessage($message->getBody(), $properties),
+            new AMQPMessage(EnvelopeBody::normalize($message->getBody()), $properties),
             $this->exchange,
             $this->routingKey($queue),
         );

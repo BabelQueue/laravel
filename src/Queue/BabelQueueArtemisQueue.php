@@ -7,6 +7,7 @@ namespace BabelQueue\Queue;
 use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\ShouldQueuePolyglot;
 use BabelQueue\Queue\Jobs\BabelQueueArtemisJob;
+use BabelQueue\Support\EnvelopeBody;
 use Closure;
 use Illuminate\Contracts\Queue\Job as JobContract;
 use Illuminate\Contracts\Queue\Queue as QueueContract;
@@ -184,7 +185,7 @@ class BabelQueueArtemisQueue extends Queue implements QueueContract
             $headers['correlation-id'] = $traceId;
         }
 
-        $this->send((string) $frame->body, $queue, $headers, $delaySeconds * 1000);
+        $this->send(EnvelopeBody::normalize((string) $frame->body), $queue, $headers, $delaySeconds * 1000);
     }
 
     /**
