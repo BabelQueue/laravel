@@ -4,17 +4,27 @@ declare(strict_types=1);
 
 namespace BabelQueue\Support;
 
+use BabelQueue\Codec\EnvelopeCodec;
+
 /**
  * Prepares a raw envelope body for being written back to a broker (release/republish)
  * without changing anything the broker did not already hold.
  *
  * A decode -> encode round trip through PHP arrays is lossy for the data channel (a nested
  * `{}` becomes `[]`, an integer above PHP_INT_MAX becomes a float), so the body is NOT
- * re-serialised. It is scanned member by member and every value is kept byte for byte; the only
- * edit is the one ADR-0031 (c) asks for on re-emit: a body that carries the inbound `urn` alias
- * is rewritten so the URN lives in `job` and `urn` is gone. A body without `urn`, a body the
- * scanner cannot make sense of (poison, non-object JSON, a non-string/blank `urn`, a duplicated
- * `job`/`urn` key) is returned unchanged, so a retry never loses a message.
+ * re-serialised. It is scanned member by member and every value is kept byte for byte. The only
+ * edits are the ones ADR-0031 asks for on re-emit, i.e. what `decode` -> `encode` would change
+ * in the members that are not `data`:
+ *
+ *  - a body that carries the inbound `urn` alias is rewritten so the URN lives in `job` and
+ *    `urn` is gone (ADR-0031 (c));
+ *  - the keys message-envelope.md section 10 forbids are removed: `timestamp` at the top level and
+ *    `max_retries` / `attempts` / `source` / `ts` inside `meta`, so a retry never puts them back on
+ *    the wire (ADR-0031 (b), GR-8). The key lists are read from the core codec, not copied.
+ *
+ * A body the scanner cannot make sense of (poison, non-object JSON, a non-string/blank `urn`, a
+ * duplicated `job`/`urn` key for the alias edit) is left alone for that edit, so a retry never
+ * loses a message. A body with nothing to edit is returned unchanged, byte for byte.
  *
  * Unknown top-level and `meta` keys, empty objects and big integers therefore survive as-is.
  */
@@ -25,11 +35,6 @@ final class EnvelopeBody
 
     public static function normalize(string $rawBody): string
     {
-        // Cheap exit: no member can be named "urn" without the substring being present.
-        if (! str_contains($rawBody, 'urn')) {
-            return $rawBody;
-        }
-
         if (! is_array(json_decode($rawBody, true))) {
             return $rawBody;
         }
@@ -39,50 +44,97 @@ final class EnvelopeBody
             return $rawBody;
         }
 
+        $changed = false;
+
+        // Forbidden top-level keys, and forbidden keys inside "meta".
+        $kept = [];
+        foreach ($members as $member) {
+            if (in_array($member['key'], EnvelopeCodec::FORBIDDEN_TOP_LEVEL_KEYS, true)) {
+                $changed = true;
+
+                continue;
+            }
+
+            if ($member['key'] === 'meta') {
+                $cleaned = self::withoutForbiddenMeta($member['value']);
+                if ($cleaned !== $member['value']) {
+                    $changed = true;
+                    $member['value'] = $cleaned;
+                    $member['raw'] = $member['rawKey'] . ':' . $cleaned;
+                }
+            }
+
+            $kept[] = $member;
+        }
+        $members = $kept;
+
+        // The inbound "urn" alias.
         $jobIndex = null;
         $urnIndex = null;
+        $ambiguous = false;
         foreach ($members as $i => $member) {
             if ($member['key'] === 'job') {
-                if ($jobIndex !== null) {
-                    return $rawBody;
-                }
+                $ambiguous = $ambiguous || $jobIndex !== null;
                 $jobIndex = $i;
             } elseif ($member['key'] === 'urn') {
-                if ($urnIndex !== null) {
-                    return $rawBody;
-                }
+                $ambiguous = $ambiguous || $urnIndex !== null;
                 $urnIndex = $i;
             }
         }
 
-        if ($urnIndex === null) {
-            return $rawBody;
-        }
-
         $parts = array_map(static fn (array $m): string => $m['raw'], $members);
 
-        if ($jobIndex !== null) {
-            $job = json_decode($members[$jobIndex]['value']);
-            $jobBlank = $job === null || (is_string($job) && trim($job, self::BLANK_CHARS) === '');
+        if ($urnIndex !== null && ! $ambiguous) {
+            if ($jobIndex !== null) {
+                $job = json_decode($members[$jobIndex]['value']);
+                $jobBlank = $job === null || (is_string($job) && trim($job, self::BLANK_CHARS) === '');
 
-            if ($jobBlank) {
-                $urn = json_decode($members[$urnIndex]['value']);
-                if (! is_string($urn) || trim($urn, self::BLANK_CHARS) === '') {
-                    return $rawBody;
+                if ($jobBlank) {
+                    $urn = json_decode($members[$urnIndex]['value']);
+                    if (is_string($urn) && trim($urn, self::BLANK_CHARS) !== '') {
+                        $parts[$jobIndex] = $members[$jobIndex]['rawKey'] . ':' . $members[$urnIndex]['value'];
+                        unset($parts[$urnIndex]);
+                        $changed = true;
+                    }
+                } else {
+                    unset($parts[$urnIndex]);
+                    $changed = true;
                 }
-                $parts[$jobIndex] = $members[$jobIndex]['rawKey'] . ':' . $members[$urnIndex]['value'];
+            } else {
+                $urn = json_decode($members[$urnIndex]['value']);
+                if (is_string($urn) && trim($urn, self::BLANK_CHARS) !== '') {
+                    $parts[$urnIndex] = '"job":' . $members[$urnIndex]['value'];
+                    $changed = true;
+                }
             }
-
-            unset($parts[$urnIndex]);
-        } else {
-            $urn = json_decode($members[$urnIndex]['value']);
-            if (! is_string($urn) || trim($urn, self::BLANK_CHARS) === '') {
-                return $rawBody;
-            }
-            $parts[$urnIndex] = '"job":' . $members[$urnIndex]['value'];
         }
 
-        return '{' . implode(',', $parts) . '}';
+        return $changed ? '{' . implode(',', $parts) . '}' : $rawBody;
+    }
+
+    /**
+     * The raw `meta` value without the keys section 10 forbids; the value itself when it is not an
+     * object, cannot be scanned, or holds none of them.
+     */
+    private static function withoutForbiddenMeta(string $rawMeta): string
+    {
+        $members = self::members($rawMeta);
+        if ($members === null) {
+            return $rawMeta;
+        }
+
+        $parts = [];
+        $dropped = false;
+        foreach ($members as $member) {
+            if (in_array($member['key'], EnvelopeCodec::FORBIDDEN_META_KEYS, true)) {
+                $dropped = true;
+
+                continue;
+            }
+            $parts[] = $member['raw'];
+        }
+
+        return $dropped ? '{' . implode(',', $parts) . '}' : $rawMeta;
     }
 
     /**

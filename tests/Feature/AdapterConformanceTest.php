@@ -287,6 +287,47 @@ final class AdapterConformanceTest extends TestCase
         }
     }
 
+    /**
+     * A retry must not put the keys section 10 forbids back on the wire: whatever the producer
+     * sent, the republished body carries none of them (`expect_absent_after_reencode`), and the
+     * rest of the body is untouched.
+     */
+    public function test_forbidden_keys_are_not_republished_on_release(): void
+    {
+        foreach ($this->cases('forbidden_keys') as $case) {
+            $name = (string) $case['name'];
+            $body = $this->fixture($case);
+
+            $published = [];
+            $channel = $this->channel();
+            $channel->shouldReceive('basic_publish')->once()->andReturnUsing(
+                static function (AMQPMessage $message) use (&$published): void {
+                    $published[] = $message;
+                },
+            );
+            $channel->shouldReceive('basic_ack')->once()->with(1);
+
+            $message = Mockery::mock(AMQPMessage::class);
+            $message->shouldReceive('getBody')->andReturn($body);
+            $message->shouldReceive('getChannel')->andReturn($channel);
+            $message->shouldReceive('getDeliveryTag')->andReturn(1);
+            $message->shouldReceive('has')->andReturn(false);
+            $message->shouldReceive('get_properties')->andReturn([]);
+            $channel->shouldReceive('basic_get')->once()->andReturn($message);
+
+            $job = $this->makeQueue($channel)->pop('orders');
+            self::assertInstanceOf(BabelQueueRabbitJob::class, $job, $name);
+            $job->release();
+
+            self::assertCount(1, $published, $name);
+            $out = self::parse($published[0]->getBody());
+            self::assertNotEmpty((array) $case['expect_absent_after_reencode'], $name);
+            foreach ((array) $case['expect_absent_after_reencode'] as $pointer) {
+                self::assertFalse(self::has($out, (string) $pointer), sprintf('%s: %s must not be republished', $name, $pointer));
+            }
+        }
+    }
+
     // ----------------------------------------------------------------- helpers
 
     /** @param array<string, mixed> $case */

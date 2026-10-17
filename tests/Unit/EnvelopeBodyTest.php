@@ -87,4 +87,41 @@ final class EnvelopeBodyTest extends TestCase
             self::assertSame($body, EnvelopeBody::normalize($body), $body);
         }
     }
+
+    public function test_forbidden_top_level_and_meta_keys_are_removed_and_the_rest_is_kept_byte_for_byte(): void
+    {
+        $body = '{"job":"urn:a","timestamp":1700000000,"data":{"big":12345678901234567890,"e":{}},"meta":{"id":"i","ts":5,"max_retries":3,"attempts":2,"source":"x","ext":{}},"vendor":{},"trace_id":"t","attempts":0}';
+
+        self::assertSame(
+            '{"job":"urn:a","data":{"big":12345678901234567890,"e":{}},"meta":{"id":"i","ext":{}},"vendor":{},"trace_id":"t","attempts":0}',
+            EnvelopeBody::normalize($body),
+        );
+    }
+
+    public function test_forbidden_keys_are_removed_when_there_is_no_urn_and_when_there_is(): void
+    {
+        $out = json_decode(EnvelopeBody::normalize('{"urn":"urn:a","timestamp":1,"meta":{"ts":1},"data":{}}'));
+
+        self::assertSame('urn:a', $out->job);
+        self::assertObjectNotHasProperty('urn', $out);
+        self::assertObjectNotHasProperty('timestamp', $out);
+        self::assertObjectNotHasProperty('ts', $out->meta);
+    }
+
+    public function test_an_escaped_forbidden_key_or_alias_is_still_found(): void
+    {
+        $out = json_decode(EnvelopeBody::normalize('{"ur\u006e":"urn:a","times\u0074amp":1,"meta":{"\u0074s":1,"id":"i"}}'));
+
+        self::assertSame('urn:a', $out->job);
+        self::assertObjectNotHasProperty('timestamp', $out);
+        self::assertObjectNotHasProperty('ts', $out->meta);
+        self::assertSame('i', $out->meta->id);
+    }
+
+    public function test_a_meta_that_is_not_an_object_is_left_alone(): void
+    {
+        $body = '{"job":"urn:a","meta":[1,2],"data":{}}';
+
+        self::assertSame($body, EnvelopeBody::normalize($body));
+    }
 }

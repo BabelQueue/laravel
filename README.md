@@ -258,6 +258,24 @@ A thrown handler leaves the id **unmarked**, so retry / DLQ still apply and a
 later delivery re-runs it. A message with no usable `meta.id` always runs
 (fail-open).
 
+## Known limits
+
+**Redis retry (`babelqueue-redis`).** `pop()` delegates to Laravel's `RedisQueue::pop`, whose atomic
+reserve/migrate step is a Lua script that decodes and re-encodes the body with Redis' bundled `cjson`. On every retry
+the body that goes back to Redis (and, via `:delayed`, to polyglot consumers) is therefore rewritten by `cjson`, not by
+BabelQueue:
+
+- integers with more than about 14 significant digits (order or payment IDs, `int64` values) lose precision;
+- an empty `[]` is re-encoded as `{}`;
+- an inbound `urn` alias is not moved into `job`, and the keys that message-envelope.md section 10 forbids
+  (`timestamp`, `meta.ts`, `meta.max_retries`, `meta.attempts`, `meta.source`) are not removed.
+
+This deviates from ADR-0031 (b)/(c), which ask for a re-emit that is byte-safe and strips forbidden keys. It predates
+1.23 and is not fixed here, because it needs a BabelQueue-owned pop/release Lua script (a design decision, tracked as a
+follow-up). The RabbitMQ, Artemis and SQS drivers are not affected: RabbitMQ and Artemis republish the original body
+(only the alias and the forbidden keys are edited), SQS never rewrites it. Until then, keep identifiers above 15 digits
+as strings in `data` when a job can be retried on Redis.
+
 ## Testing
 
 ```bash
