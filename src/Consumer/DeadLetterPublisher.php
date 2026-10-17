@@ -52,8 +52,11 @@ final class DeadLetterPublisher
             return;
         }
 
+        $rawBody = $message->getRawBody();
+        $poison = $this->poisonCopy($rawBody);
+
         $envelope = DeadLetter::annotate(
-            $this->decode($message->getRawBody()),
+            $poison ?? EnvelopeCodec::decode($rawBody),
             $reason,
             $e,
             (string) $message->getQueue(),
@@ -63,10 +66,13 @@ final class DeadLetterPublisher
 
         $connection = $this->config['connection'] ?? $message->getConnectionName();
 
-        $this->queue->connection($connection)->pushRaw(
-            EnvelopeCodec::encode($envelope),
-            $this->target($message),
-        );
+        // A poison copy is written as-is (like php-sdk's Consume\DeadLetterPublisher): encode() would
+        // reshape a rejected list "data" into an object or refuse a forbidden key.
+        $body = $poison === null
+            ? EnvelopeCodec::encode($envelope)
+            : json_encode($envelope, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $this->queue->connection($connection)->pushRaw($body, $this->target($message));
     }
 
     /**
@@ -83,15 +89,20 @@ final class DeadLetterPublisher
     }
 
     /**
-     * Decode the raw body; a poison (non-JSON) body still gets dead-lettered as
-     * an empty envelope so it can be inspected rather than lost.
+     * The inspectable copy of a poison body (one the codec decodes to the empty envelope, e.g.
+     * malformed JSON or a list `data`): the original JSON object verbatim, else `{"raw": "<body>"}`.
+     * Null when the body is a readable envelope.
      *
-     * @return array<string, mixed>
+     * @return array<string, mixed>|null
      */
-    private function decode(string $rawBody): array
+    private function poisonCopy(string $rawBody): ?array
     {
-        $decoded = EnvelopeCodec::decode($rawBody);
+        if (EnvelopeCodec::decode($rawBody, static function (): void {}) !== []) {
+            return null;
+        }
 
-        return $decoded !== [] ? $decoded : ['raw' => $rawBody];
+        $decoded = json_decode($rawBody, true);
+
+        return is_array($decoded) ? $decoded : ['raw' => $rawBody];
     }
 }

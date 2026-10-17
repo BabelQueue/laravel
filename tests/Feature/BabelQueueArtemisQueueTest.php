@@ -155,6 +155,55 @@ final class BabelQueueArtemisQueueTest extends TestCase
         $this->assertSame('trace-1', $captured['correlation-id']); // trace id preserved across retry
     }
 
+    public function test_release_republishes_the_body_without_rewriting_it(): void
+    {
+        $body = '{"job":"urn:babel:orders:created","trace_id":"trace-1","data":{"filters":{},"big":12345678901234567890},'
+            . '"meta":{"id":"m-1","schema_version":1,"ext":{"acme":{}}},"attempts":0,"extra":{}}';
+        $frame = new Frame('MESSAGE', ['correlation-id' => 'trace-1'], $body);
+
+        $captured = null;
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('subscribe')->once();
+        $stomp->shouldReceive('read')->once()->andReturn($frame);
+        $stomp->shouldReceive('send')->once()->with(
+            'orders',
+            Mockery::on(function (Message $m) use (&$captured): bool {
+                $captured = $m;
+
+                return true;
+            }),
+        );
+        $stomp->shouldReceive('ack')->once()->with($frame);
+
+        $this->makeQueue($stomp)->pop('orders')->release();
+
+        $this->assertSame($body, (string) $captured->body);
+    }
+
+    public function test_release_moves_an_inbound_urn_alias_into_job(): void
+    {
+        $body = '{"urn":"urn:acme:a","trace_id":"t","data":{},"meta":{"id":"m-1","schema_version":1},"attempts":0}';
+        $frame = new Frame('MESSAGE', [], $body);
+
+        $captured = null;
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('subscribe')->once();
+        $stomp->shouldReceive('read')->once()->andReturn($frame);
+        $stomp->shouldReceive('send')->once()->with(
+            'orders',
+            Mockery::on(function (Message $m) use (&$captured): bool {
+                $captured = $m;
+
+                return true;
+            }),
+        );
+        $stomp->shouldReceive('ack')->once()->with($frame);
+
+        $this->makeQueue($stomp)->pop('orders')->release();
+
+        $this->assertSame('{"job":"urn:acme:a","trace_id":"t","data":{},"meta":{"id":"m-1","schema_version":1},"attempts":0}', (string) $captured->body);
+    }
+
     public function test_destination_prefix_is_applied(): void
     {
         $stomp = Mockery::mock(StatefulStomp::class);

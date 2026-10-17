@@ -264,13 +264,20 @@ final class AdapterConformanceTest extends TestCase
             $job->release();
 
             self::assertCount(1, $published, $name);
-            self::assertSame(\BabelQueue\Codec\EnvelopeCodec::encode(\BabelQueue\Codec\EnvelopeCodec::decode($body)), $published[0]->getBody(), $name . ': body is the codec-normalised envelope');
+            // Expectations come from the fixture, not from the implementation under test: a retry
+            // re-emits the very same bytes, except that an inbound `urn` alias moves into `job`.
+            if (! isset($case['expect_absent_after_reencode'])) {
+                self::assertSame($body, $published[0]->getBody(), $name . ': a release republishes the body byte for byte');
+            }
 
             /** @var AMQPTable $table */
             $table = $published[0]->get('application_headers');
             self::assertSame($case['expect_attempts'], $table->getNativeData()['x-attempts'], $name . ': attempts + 1 in x-attempts');
 
             $out = self::parse($published[0]->getBody());
+            foreach ((array) ($case['expect_absent_after_reencode'] ?? []) as $pointer) {
+                self::assertFalse(self::has($out, (string) $pointer), sprintf('%s: %s must be gone after the re-emit', $name, $pointer));
+            }
             foreach ($this->expectedPreserved($name) as $pointer => $expected) {
                 self::assertTrue(
                     self::deepEqual($expected, self::pointer($out, $pointer, $name)),

@@ -9,6 +9,18 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+### Changed
+- Rabbit/Artemis `release()` republishes the body byte for byte; only an inbound `urn` alias is moved into `job`
+  (ADR-0031 (c)). Unknown top-level and `meta` keys, nested `{}` and big integers are never re-serialised.
+- The dead-letter publisher keeps a poison body (e.g. a list `data`) as the original JSON object verbatim, else
+  `{"raw": "<body>"}` — the same shape as php-sdk's `Consume\DeadLetterPublisher`.
+- Requires `babelqueue/php-sdk` `^1.23.0`.
+
+### Known limits
+- The Redis driver's atomic pop/release goes through Laravel's Lua script (`cjson`), which rewrites the body: a `urn`
+  alias is not moved into `job`, and `{}`/`[]` and long numbers can be altered by `cjson`. This predates 1.23 and is
+  Laravel's behaviour, not BabelQueue's.
+
 ## [1.5.1] - 2026-10-11
 
 ### Fixed

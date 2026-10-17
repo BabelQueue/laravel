@@ -65,6 +65,33 @@ final class DeadLetterPublisherTest extends TestCase
         $this->assertIsInt($captured['dead_letter']['failed_at']);
     }
 
+    public function test_a_poison_body_is_dead_lettered_as_the_original_object_or_as_raw(): void
+    {
+        $cases = [
+            // a list "data" is rejected by decode(): the original object is kept verbatim, not reshaped
+            'list data' => ['{"job":"urn:a","timestamp":1,"data":[1,2]}', ['job' => 'urn:a', 'timestamp' => 1, 'data' => [1, 2]]],
+            'not json' => ['not json', ['raw' => 'not json']],
+        ];
+
+        foreach ($cases as $name => [$body, $expected]) {
+            $captured = null;
+            $queue = Mockery::mock(QueueContract::class);
+            $queue->shouldReceive('pushRaw')->once()->withArgs(function ($payload) use (&$captured): bool {
+                $captured = json_decode($payload, true);
+
+                return true;
+            })->andReturn('x');
+            $factory = Mockery::mock(QueueFactory::class);
+            $factory->shouldReceive('connection')->once()->andReturn($queue);
+
+            (new DeadLetterPublisher($factory, ['enabled' => true]))->publish($this->message('orders', 'bq-redis', $body), 'poison');
+
+            $this->assertSame('poison', $captured['dead_letter']['reason'], $name);
+            unset($captured['dead_letter']);
+            $this->assertSame($expected, $captured, $name);
+        }
+    }
+
     public function test_explicit_dlq_queue_name_overrides_the_suffix(): void
     {
         $queue = Mockery::mock(QueueContract::class);
