@@ -273,7 +273,7 @@ BabelQueue:
 This deviates from ADR-0031 (b)/(c), which ask for a re-emit that is byte-safe and strips forbidden keys. It predates
 1.23 and is not fixed here, because it needs a BabelQueue-owned pop/release Lua script (a design decision, tracked as a
 follow-up). The RabbitMQ, Artemis and SQS drivers are not affected: RabbitMQ and Artemis republish the original body
-(only the alias and the forbidden keys are edited), SQS never rewrites it. Until then, keep identifiers above 15 digits
+(only the alias and the forbidden keys are edited), SQS never rewrites it. Until then, keep identifiers longer than 14 digits
 as strings in `data` when a job can be retried on Redis.
 
 ## Testing
