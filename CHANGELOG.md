@@ -9,6 +9,11 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-17
+
+MINOR: retry/dead-letter behaviour change and a raised core floor (ADR-0031). The envelope stays at
+`schema_version: 1`.
+
 ### Changed
 - Rabbit/Artemis `release()` republishes the body byte for byte; only an inbound `urn` alias is moved into `job`
   (ADR-0031 (c)) and the section 10 forbidden keys (`timestamp`, `meta.ts`/`max_retries`/`attempts`/`source`) are
