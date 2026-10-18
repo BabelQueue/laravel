@@ -6,7 +6,9 @@ namespace BabelQueue\Queue;
 
 use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\ShouldQueuePolyglot;
+use BabelQueue\Exceptions\BabelQueueException;
 use BabelQueue\Queue\Jobs\BabelQueueSqsJob;
+use BabelQueue\Support\SchemaVersionGate;
 use Illuminate\Queue\SqsQueue;
 
 /**
@@ -27,6 +29,9 @@ use Illuminate\Queue\SqsQueue;
  */
 class BabelQueueSqsQueue extends SqsQueue
 {
+    /** The SQS `DelaySeconds` ceiling (§3.4). */
+    public const MAX_DELAY_SECONDS = 900;
+
     /**
      * @param  \BabelQueue\Contracts\ShouldQueuePolyglot|object|string  $job
      * @param  mixed  $data
@@ -40,6 +45,48 @@ class BabelQueueSqsQueue extends SqsQueue
         }
 
         return parent::push($job, $data, $queue);
+    }
+
+    /**
+     * Push a job after a delay. A polyglot job is sent as the strict envelope with `DelaySeconds`
+     * (§3.4); a delay SQS cannot honour is rejected with a {@see BabelQueueException} and never
+     * silently dropped or truncated: more than {@see self::MAX_DELAY_SECONDS} seconds on any queue, or
+     * any per-message delay on a FIFO queue (`.fifo`, which supports only a queue-level delay).
+     * Standard Laravel jobs pass straight through to the parent.
+     *
+     * @param  \DateTimeInterface|\DateInterval|int  $delay
+     * @param  \BabelQueue\Contracts\ShouldQueuePolyglot|object|string  $job
+     * @param  mixed  $data
+     * @param  string|null  $queue
+     * @return mixed
+     */
+    public function later($delay, $job, $data = '', $queue = null)
+    {
+        if (! $job instanceof ShouldQueuePolyglot) {
+            return parent::later($delay, $job, $data, $queue);
+        }
+
+        $seconds = $this->secondsUntil($delay);
+        $resolved = $queue ?? $this->default;
+
+        if ($seconds > self::MAX_DELAY_SECONDS) {
+            throw new BabelQueueException(sprintf(
+                'SQS cannot delay a message by %d seconds: DelaySeconds is capped at %d (broker-bindings.md §3.4).',
+                $seconds,
+                self::MAX_DELAY_SECONDS,
+            ));
+        }
+        if ($seconds > 0 && str_ends_with($this->getQueue($resolved), '.fifo')) {
+            throw new BabelQueueException(
+                'SQS FIFO queues do not support a per-message delay; configure a queue-level DelaySeconds instead (broker-bindings.md §3.4).',
+            );
+        }
+
+        $payload = EnvelopeCodec::fromJob($job, $resolved);
+
+        $this->pushRaw(EnvelopeCodec::encode($payload), $queue, ['DelaySeconds' => $seconds]);
+
+        return $payload['meta']['id'];
     }
 
     /**
@@ -100,31 +147,8 @@ class BabelQueueSqsQueue extends SqsQueue
             $message,
             $this->connectionName,
             $queue,
-            self::unsupportedSchemaVersion($attribute),
+            SchemaVersionGate::rejected($attribute),
         );
-    }
-
-    /**
-     * The `bq-schema-version` attribute value when it is present, non-blank and not the supported
-     * version (exact string match against {@see EnvelopeCodec::SCHEMA_VERSION}); null when the body
-     * may be decoded.
-     */
-    private static function unsupportedSchemaVersion(mixed $value): ?string
-    {
-        if (! is_string($value) || self::isBlankASCII($value)) {
-            return null;
-        }
-
-        return $value === (string) EnvelopeCodec::SCHEMA_VERSION ? null : $value;
-    }
-
-    /**
-     * Blank means the empty string or only ASCII whitespace (space, `\t`, `\n`, `\v`, `\f`, `\r`) — the
-     * same set in every SDK (GR-5); not `trim()`, whose default set contains `\0` and lacks `\f`.
-     */
-    private static function isBlankASCII(string $value): bool
-    {
-        return preg_match('/\A[ \t\n\x0B\f\r]*\z/', $value) === 1;
     }
 
     /**

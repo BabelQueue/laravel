@@ -9,6 +9,20 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+### Added
+- **SQS delay limits (section 3.4).** `BabelQueueSqsQueue::later()` throws `BabelQueueException` for a polyglot
+  job whose delay exceeds 900 seconds or that carries a per-message delay on a `.fifo` queue.
+- **Artemis `bq_schema_version` gate (section 7.7).** A frame whose `bq_schema_version` is not blank or `1` is
+  rejected without decoding the body (shared `Support\SchemaVersionGate`, also used by the SQS driver).
+- **Conformance known-gaps gate (tests/CI only).** `conformance-known-gaps.json` lists the SQS section 3.6 and
+  Artemis section 7.5 `attempts` reconciliation cases (the drivers keep Laravel's own `attempts()`); they are
+  reported as honest `fail`. CI and release fail on a stale gap, an unlisted `fail`, or a gap reason without an
+  `ADR-NNNN` / `.ssot/plans/` reference.
+
+### Changed
+- **Internal:** the schema-version stub envelope used by the SQS and Artemis jobs now lives in
+  `Support\SchemaVersionGate::stubEnvelope()` instead of being duplicated in both job classes (no behaviour change).
+
 ## [1.6.0] - 2026-10-17
 
 MINOR: retry/dead-letter behaviour change and a raised core floor (ADR-0031). The envelope stays at

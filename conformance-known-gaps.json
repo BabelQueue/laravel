@@ -1,0 +1,64 @@
+{
+  "gaps": [
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/first-delivery",
+      "reason": "broker-bindings.md §3.6: BabelQueueSqsJob::attempts() surfaces the native ApproximateReceiveCount without reconciling it with body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/third-delivery",
+      "reason": "broker-bindings.md §3.6: BabelQueueSqsJob::attempts() surfaces the native ApproximateReceiveCount without reconciling it with body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/native-exceeds-body",
+      "reason": "broker-bindings.md §3.6: BabelQueueSqsJob::attempts() surfaces the native ApproximateReceiveCount without reconciling it with body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/never-lower-runtime",
+      "reason": "broker-bindings.md §3.6: BabelQueueSqsJob::attempts() surfaces the native ApproximateReceiveCount without reconciling it with body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/garbage-count-ignored",
+      "reason": "broker-bindings.md §3.6: BabelQueueSqsJob::attempts() surfaces the native ApproximateReceiveCount without reconciling it with body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "sqs",
+      "case": "attempts_reconciliation/absent-count",
+      "reason": "broker-bindings.md §3.6: a message without ApproximateReceiveCount makes BabelQueueSqsJob::attempts() crash (Illuminate SqsJob reads the attribute unguarded) instead of falling back to body.attempts; not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/first-delivery",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/third-delivery",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/native-exceeds-body",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/never-lower-runtime",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/first-delivery-keeps-body",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    },
+    {
+      "section": "artemis",
+      "case": "attempts_reconciliation/native-equals-body",
+      "reason": "broker-bindings.md §7.5: BabelQueueArtemisJob::attempts() derives the count from the bq_attempts header (or the body) plus one instead of max(body.attempts, delivery-count); not implemented. Follow-up: .ssot/plans/2026-10-17-r1-conformance/DEVAM.md \"Açık işler\"."
+    }
+  ]
+}

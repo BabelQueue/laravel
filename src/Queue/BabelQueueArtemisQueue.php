@@ -8,6 +8,7 @@ use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\ShouldQueuePolyglot;
 use BabelQueue\Queue\Jobs\BabelQueueArtemisJob;
 use BabelQueue\Support\EnvelopeBody;
+use BabelQueue\Support\SchemaVersionGate;
 use Closure;
 use Illuminate\Contracts\Queue\Job as JobContract;
 use Illuminate\Contracts\Queue\Queue as QueueContract;
@@ -136,7 +137,9 @@ class BabelQueueArtemisQueue extends Queue implements QueueContract
     }
 
     /**
-     * Pop the next job off of the queue.
+     * Pop the next job off of the queue. The §7.7 `bq_schema_version` header is read BEFORE the body
+     * is decoded: a version other than the supported one is rejected without decoding (the job then
+     * presents the unsupported-schema-version stub, so the dispatcher quarantines or fails it).
      *
      * @param  string|null  $queue
      */
@@ -157,6 +160,7 @@ class BabelQueueArtemisQueue extends Queue implements QueueContract
             $frame,
             $this->connectionName,
             $queue,
+            SchemaVersionGate::rejected($frame['bq_schema_version'] ?? null),
         );
     }
 

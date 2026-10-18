@@ -7,6 +7,7 @@ namespace BabelQueue\Queue\Jobs;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\Queue\BabelQueueArtemisQueue;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
+use BabelQueue\Support\SchemaVersionGate;
 use Illuminate\Container\Container;
 use Illuminate\Queue\Jobs\Job;
 use Stomp\Transport\Frame;
@@ -27,18 +28,47 @@ use Stomp\Transport\Frame;
  */
 class BabelQueueArtemisJob extends Job implements PolyglotMessage
 {
-    use ParsesPolyglotEnvelope;
+    use ParsesPolyglotEnvelope {
+        envelope as private decodeEnvelope;
+    }
 
+    /**
+     * Reserved routing URN prefix for a message rejected by the §7.7 version gate; the rejected
+     * `bq_schema_version` value is appended. No handler is ever mapped to it.
+     */
+    public const UNSUPPORTED_SCHEMA_URN_PREFIX = SchemaVersionGate::UNSUPPORTED_URN_PREFIX;
+
+    /**
+     * @param  string|null  $rejectedSchemaVersion  the `bq_schema_version` header value when the §7.7
+     *                                              gate rejected the message, else null
+     */
     public function __construct(
         Container $container,
         protected BabelQueueArtemisQueue $artemis,
         protected Frame $frame,
         string $connectionName,
         string $queue,
+        private readonly ?string $rejectedSchemaVersion = null,
     ) {
         $this->container = $container;
         $this->connectionName = $connectionName;
         $this->queue = $queue;
+    }
+
+    /**
+     * The decoded envelope, or — for a gate-rejected message — a stub that never touches the body: a
+     * reserved sentinel URN and the rejected, non-integer `meta.schema_version`, so the dispatcher
+     * takes its unsupported-schema-version path (DLQ quarantine or fail) and no handler runs.
+     *
+     * @return array<string, mixed>
+     */
+    protected function envelope(): array
+    {
+        if ($this->rejectedSchemaVersion !== null) {
+            return SchemaVersionGate::stubEnvelope($this->rejectedSchemaVersion);
+        }
+
+        return $this->decodeEnvelope();
     }
 
     /**

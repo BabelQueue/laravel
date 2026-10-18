@@ -7,6 +7,7 @@ namespace BabelQueue\Queue\Jobs;
 use Aws\Sqs\SqsClient;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
+use BabelQueue\Support\SchemaVersionGate;
 use Illuminate\Queue\Jobs\SqsJob;
 
 /**
@@ -35,7 +36,7 @@ class BabelQueueSqsJob extends SqsJob implements PolyglotMessage
      * Reserved routing URN prefix for a message rejected by the §3.7 version gate; the rejected
      * `bq-schema-version` value is appended. No handler is ever mapped to it.
      */
-    public const UNSUPPORTED_SCHEMA_URN_PREFIX = 'babelqueue:unsupported-schema-version:';
+    public const UNSUPPORTED_SCHEMA_URN_PREFIX = SchemaVersionGate::UNSUPPORTED_URN_PREFIX;
 
     /**
      * @param  \Illuminate\Container\Container  $container
@@ -64,10 +65,7 @@ class BabelQueueSqsJob extends SqsJob implements PolyglotMessage
     protected function envelope(): array
     {
         if ($this->rejectedSchemaVersion !== null) {
-            return [
-                'job' => self::UNSUPPORTED_SCHEMA_URN_PREFIX . $this->rejectedSchemaVersion,
-                'meta' => ['schema_version' => $this->rejectedSchemaVersion],
-            ];
+            return SchemaVersionGate::stubEnvelope($this->rejectedSchemaVersion);
         }
 
         return $this->decodeEnvelope();
