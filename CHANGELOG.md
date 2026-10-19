@@ -9,6 +9,10 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-19
+
+Requires `babelqueue/php-sdk` ^1.24.0 (ASCII trim and the non-string `job` rule, ADR-0032).
+
 ### Added
 - **SQS delay limits (section 3.4).** `BabelQueueSqsQueue::later()` throws `BabelQueueException` for a polyglot
   job whose delay exceeds 900 seconds or that carries a per-message delay on a `.fifo` queue.
