@@ -348,7 +348,8 @@ final class AdapterConformanceTest extends TestCase
             };
 
             $push = $byScript(LuaScripts::push());
-            $later = $byScript(LuaScripts::later());
+            // LuaScripts::later() only exists from Laravel 12; Laravel 11 delays with a plain ZADD.
+            $later = method_exists(LuaScripts::class, 'later') ? $byScript(LuaScripts::later()) : $byScript('zadd');
             $pop = $byScript(LuaScripts::pop());
             self::assertNotSame([], $push, 'push reached Redis');
             self::assertNotSame([], $later, 'later reached Redis');
@@ -717,6 +718,9 @@ final class AdapterConformanceTest extends TestCase
     {
         $connection = Mockery::mock(RedisConnection::class);
         $connection->shouldReceive('eval')->andReturnUsing(static fn (...$args): mixed => $onEval($args));
+        // Laravel 11's laterRaw() writes the delayed zset with ZADD instead of a Lua script; record it in the
+        // eval shape (`['zadd', numkeys, key, ...]`) so callers read the key at the same index.
+        $connection->shouldReceive('zadd')->andReturnUsing(static fn (...$args): mixed => $onEval(['zadd', 1, ...$args]));
         $factory = Mockery::mock(RedisFactory::class);
         $factory->shouldReceive('connection')->andReturn($connection);
 
