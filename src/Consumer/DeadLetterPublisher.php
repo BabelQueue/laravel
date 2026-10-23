@@ -53,24 +53,24 @@ final class DeadLetterPublisher
         }
 
         $rawBody = $message->getRawBody();
-        $poison = $this->poisonCopy($rawBody);
+        $queue = (string) $message->getQueue();
 
-        $envelope = DeadLetter::annotate(
-            $poison ?? EnvelopeCodec::decode($rawBody),
-            $reason,
-            $e,
-            (string) $message->getQueue(),
-            $message->attempts(),
-            EnvelopeCodec::SOURCE_LANG,
-        );
+        // A poison copy (reason `poison`, which the reserve script flags even for a body PHP can decode, e.g. 1e400)
+        // is written byte-for-byte by PoisonCopy (it cannot fail on the body: invalid UTF-8,
+        // 1e400, ...), like php-sdk's Consume\DeadLetterPublisher; encode() would reshape a rejected list
+        // "data" into an object or refuse a forbidden key.
+        $body = $reason === 'poison' || $this->isPoison($rawBody)
+            ? PoisonCopy::annotate($rawBody, $reason, $e, $queue, $message->attempts(), EnvelopeCodec::SOURCE_LANG)
+            : EnvelopeCodec::encode(DeadLetter::annotate(
+                EnvelopeCodec::decode($rawBody),
+                $reason,
+                $e,
+                $queue,
+                $message->attempts(),
+                EnvelopeCodec::SOURCE_LANG,
+            ));
 
         $connection = $this->config['connection'] ?? $message->getConnectionName();
-
-        // A poison copy is written as-is (like php-sdk's Consume\DeadLetterPublisher): encode() would
-        // reshape a rejected list "data" into an object or refuse a forbidden key.
-        $body = $poison === null
-            ? EnvelopeCodec::encode($envelope)
-            : json_encode($envelope, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $this->queue->connection($connection)->pushRaw($body, $this->target($message));
     }
@@ -89,20 +89,11 @@ final class DeadLetterPublisher
     }
 
     /**
-     * The inspectable copy of a poison body (one the codec decodes to the empty envelope, e.g.
-     * malformed JSON or a list `data`): the original JSON object verbatim, else `{"raw": "<body>"}`.
-     * Null when the body is a readable envelope.
-     *
-     * @return array<string, mixed>|null
+     * Whether the body is poison: the codec decodes it to the empty envelope (e.g. malformed JSON or a
+     * list `data`). Such a body is dead-lettered as-is ({@see PoisonCopy}); a readable envelope is re-encoded.
      */
-    private function poisonCopy(string $rawBody): ?array
+    private function isPoison(string $rawBody): bool
     {
-        if (EnvelopeCodec::decode($rawBody, static function (): void {}) !== []) {
-            return null;
-        }
-
-        $decoded = json_decode($rawBody, true);
-
-        return is_array($decoded) ? $decoded : ['raw' => $rawBody];
+        return EnvelopeCodec::decode($rawBody, static function (): void {}) === [];
     }
 }

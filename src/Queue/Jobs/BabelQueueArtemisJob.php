@@ -95,11 +95,17 @@ class BabelQueueArtemisJob extends Job implements PolyglotMessage
     }
 
     /**
-     * Number of times this job has been attempted (this delivery included).
+     * Attempts made before this delivery (broker-bindings.md §7.5):
+     * `max(body.attempts, delivery-count)`, where the AMQP `delivery-count` is 0-based (0 on a
+     * first delivery) and maps directly, with no -1. A first delivery therefore reads 0, and the
+     * count a runtime recorded on republish is never lowered by the broker's own count.
+     *
+     * This differs from the 1-based count Laravel's workers usually see, on `babelqueue-artemis`
+     * connections only (GR-6).
      */
     public function attempts(): int
     {
-        return $this->priorAttempts() + 1;
+        return max($this->priorAttempts(), $this->deliveryCount());
     }
 
     /**
@@ -122,7 +128,7 @@ class BabelQueueArtemisJob extends Job implements PolyglotMessage
         parent::release($delay);
 
         // Republish first (at-least-once), then ack the original delivery.
-        $this->artemis->republish($this->frame, $this->queue, $this->attempts(), (int) $delay);
+        $this->artemis->republish($this->frame, $this->queue, $this->attempts() + 1, (int) $delay);
 
         $this->artemis->ackFrame($this->frame);
     }
@@ -141,5 +147,15 @@ class BabelQueueArtemisJob extends Job implements PolyglotMessage
         }
 
         return (int) ($this->envelope()['attempts'] ?? 0);
+    }
+
+    /**
+     * The broker's 0-based `delivery-count` header; absent, empty or non-numeric reads as 0.
+     */
+    protected function deliveryCount(): int
+    {
+        $count = $this->frame['delivery-count'] ?? null;
+
+        return (is_int($count) || (is_string($count) && ctype_digit($count))) ? (int) $count : 0;
     }
 }

@@ -72,6 +72,27 @@ class BabelQueueSqsJob extends SqsJob implements PolyglotMessage
     }
 
     /**
+     * Attempts already made before this delivery (broker-bindings.md §3.6):
+     * `max(body.attempts, ApproximateReceiveCount - 1)`, so a first delivery reads 0.
+     *
+     * The body count is never lowered by the broker's count (a runtime that republishes with
+     * `attempts + 1` stays authoritative), and an absent or non-numeric `ApproximateReceiveCount`
+     * is ignored instead of raising. This differs from Laravel's {@see SqsJob::attempts()}
+     * (the raw receive count, 1-based) on `babelqueue-sqs` connections only; the standard
+     * `sqs` driver is untouched (GR-6).
+     */
+    public function attempts(): int
+    {
+        $body = $this->envelope()['attempts'] ?? 0;
+        $fromBody = is_int($body) || (is_string($body) && ctype_digit($body)) ? (int) $body : 0;
+
+        $count = $this->job['Attributes']['ApproximateReceiveCount'] ?? null;
+        $fromBroker = (is_int($count) || (is_string($count) && ctype_digit($count))) ? max((int) $count - 1, 0) : 0;
+
+        return max($fromBody, $fromBroker);
+    }
+
+    /**
      * Prefer the polyglot meta.id as the job identifier, falling back to the
      * SQS-assigned id the parent reads.
      */

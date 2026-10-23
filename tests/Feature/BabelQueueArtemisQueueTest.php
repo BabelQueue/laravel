@@ -73,6 +73,14 @@ final class BabelQueueArtemisQueueTest extends TestCase
         $this->assertSame(json_decode($payload, true)['meta']['id'], $id);
     }
 
+    public function test_push_raw_returns_null_for_a_non_string_id(): void
+    {
+        $stomp = Mockery::mock(StatefulStomp::class);
+        $stomp->shouldReceive('send')->once();
+
+        $this->assertNull($this->makeQueue($stomp)->pushRaw('{"meta":{"id":5}}', 'orders'));
+    }
+
     public function test_push_of_a_standard_job_falls_back_to_raw_send(): void
     {
         $stomp = Mockery::mock(StatefulStomp::class);
@@ -124,7 +132,7 @@ final class BabelQueueArtemisQueueTest extends TestCase
         $this->assertInstanceOf(BabelQueueArtemisJob::class, $job);
         $this->assertSame($body, $job->getRawBody());
         $this->assertSame(json_decode($body, true)['meta']['id'], $job->getJobId()); // meta.id wins over message-id
-        $this->assertSame(1, $job->attempts()); // no prior bq_attempts header → 1
+        $this->assertSame(0, $job->attempts()); // no prior bq_attempts header, delivery-count absent → 0 (§7.5)
         $job->delete();
     }
 
@@ -148,7 +156,7 @@ final class BabelQueueArtemisQueueTest extends TestCase
         $stomp->shouldReceive('ack')->once()->with($frame);
 
         $job = $this->makeQueue($stomp)->pop('orders');
-        $this->assertSame(3, $job->attempts()); // prior 2 + this delivery
+        $this->assertSame(2, $job->attempts()); // bq_attempts 2 = attempts made before this delivery (§7.5)
         $job->release();
 
         $this->assertSame('3', $captured['bq_attempts']);

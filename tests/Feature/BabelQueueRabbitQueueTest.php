@@ -98,6 +98,14 @@ final class BabelQueueRabbitQueueTest extends TestCase
         $this->assertSame(json_decode($payload, true)['meta']['id'], $id);
     }
 
+    public function test_push_raw_returns_null_for_a_non_string_id(): void
+    {
+        $channel = $this->channel();
+        $channel->shouldReceive('basic_publish')->once();
+
+        $this->assertNull($this->makeQueue($channel)->pushRaw('{"meta":{"id":5}}', 'orders'));
+    }
+
     public function test_push_of_a_standard_job_falls_back_to_raw_publish(): void
     {
         $channel = $this->channel();

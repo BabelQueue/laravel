@@ -280,7 +280,9 @@ class BabelQueueArtemisQueue extends Queue implements QueueContract
             return null;
         }
 
-        return $decoded['meta']['id'] ?? $decoded['id'] ?? null;
+        $id = $decoded['meta']['id'] ?? $decoded['id'] ?? null;
+
+        return is_string($id) ? $id : null;
     }
 
     /** Lazily resolve a live STOMP client, rebuilding it (and its subscriptions) if it dropped. */

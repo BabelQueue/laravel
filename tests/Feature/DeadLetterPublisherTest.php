@@ -92,6 +92,38 @@ final class DeadLetterPublisherTest extends TestCase
         }
     }
 
+    public function test_a_poison_body_is_published_byte_exact_and_never_throws(): void
+    {
+        $cases = [
+            'empty object stays an object' => ['{}', '{"dead_letter":{', null],
+            'big integer stays exact' => ['{"job":"urn:a","data":{"n":12345678901234567890}}', '12345678901234567890}', null],
+            'overflowing number is carried verbatim' => ['{"job":"urn:a","attempts":0,"data":{"x":1e400}}', '{"x":1e400}', null],
+            'invalid utf-8 is carried as base64' => ["\xff\xfe\x00bad", '"raw":"' . base64_encode("\xff\xfe\x00bad") . '"', 'base64'],
+            'invalid utf-8 inside an object' => ["{\"job\":\"\xff\"}", '"raw_encoding":"base64"', 'base64'],
+        ];
+
+        foreach ($cases as $name => [$body, $needle, $encoding]) {
+            $payload = null;
+            $queue = Mockery::mock(QueueContract::class);
+            $queue->shouldReceive('pushRaw')->once()->withArgs(function ($p) use (&$payload): bool {
+                $payload = $p;
+
+                return true;
+            })->andReturn('x');
+            $factory = Mockery::mock(QueueFactory::class);
+            $factory->shouldReceive('connection')->once()->andReturn($queue);
+
+            (new DeadLetterPublisher($factory, ['enabled' => true]))->publish($this->message('orders', 'bq-redis', $body), 'poison');
+
+            $this->assertIsString($payload, $name);
+            $this->assertStringContainsString($needle, $payload, $name);
+            $decoded = json_decode($payload);
+            $this->assertNotNull($decoded, $name . ': the DLQ copy must be valid JSON');
+            $this->assertSame('poison', $decoded->dead_letter->reason, $name);
+            $this->assertSame($encoding, $decoded->raw_encoding ?? null, $name);
+        }
+    }
+
     public function test_explicit_dlq_queue_name_overrides_the_suffix(): void
     {
         $queue = Mockery::mock(QueueContract::class);

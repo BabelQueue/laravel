@@ -33,6 +33,7 @@ use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Contracts\Redis\Factory as RedisFactory;
 use Illuminate\Queue\LuaScripts;
 use Illuminate\Queue\RedisQueue;
+use Illuminate\Support\Carbon;
 use Illuminate\Redis\Connections\Connection as RedisConnection;
 use Mockery;
 use PhpAmqpLib\Channel\AMQPChannel;
@@ -100,7 +101,7 @@ final class AdapterConformanceTest extends TestCase
 
             if ((bool) $case['valid']) {
                 $this->assertConsumed($case, $this->rabbitJob($body));
-                $this->assertConsumed($case, new BabelQueueJob($this->app, Mockery::mock(RedisQueue::class), $body, $body, 'babelqueue-redis', 'orders'));
+                $this->assertConsumed($case, new BabelQueueJob($this->app, Mockery::mock(RedisQueue::class), $body, $body . ' ', 'babelqueue-redis', 'orders'));
 
                 $expect = (array) $case['expect'];
                 $dispatcher = new BabelQueueDispatcher($this->app, [(string) $expect['urn'] => ConformanceHandler::class]);
@@ -301,7 +302,7 @@ final class AdapterConformanceTest extends TestCase
                 if ($args[0] === LuaScripts::push()) {
                     $pushed[] = $args[4];
                 }
-                if ($args[0] === LuaScripts::pop()) {
+                if ($args[0] === BabelQueueRedisQueue::popScript()) {
                     return [$body, $body];
                 }
 
@@ -315,6 +316,60 @@ final class AdapterConformanceTest extends TestCase
             self::assertInstanceOf(BabelQueueJob::class, $job);
             self::assertSame($body, $job->getRawBody(), 'reserve returns the element unchanged');
         }, 'payload_identity');
+    }
+
+    /** §1.6 / ADR-0033: the delayed score is `floor(now) + ceil(delay)`; pure, clock pinned. */
+    public function test_redis_delay_score(): void
+    {
+        $queue = $this->redisQueue(static fn (array $args): mixed => []);
+        $availableAt = new \ReflectionMethod($queue, 'availableAt');
+
+        ConformanceResults::each('redis_delay', static function (array $case) use ($queue, $availableAt): void {
+            Carbon::setTestNow(Carbon::createFromTimestamp((int) floor((float) $case['now'])));
+            try {
+                self::assertSame($case['expect_score'], $availableAt->invoke($queue, $case['delay']), (string) $case['name']);
+            } finally {
+                Carbon::setTestNow();
+            }
+        });
+    }
+
+    /**
+     * The `delayed_score` behavioural block against the real `later` path on a recording client: one write
+     * to `:delayed`, the member the body byte for byte, the integer score, no notify token. The live
+     * Redis blocks run in `tests/Integration/RedisLayoutConformanceTest.php`.
+     */
+    public function test_redis_layout_delayed_score(): void
+    {
+        ConformanceResults::each('redis_layout', function (array $case): void {
+            $queueName = (string) $case['queue'];
+            self::assertCount(1, $case['steps']);
+            $step = $case['steps'][0];
+            self::assertSame('push_delayed', $step['op']);
+
+            /** @var list<array<int, mixed>> $writes */
+            $writes = [];
+            $queue = $this->redisQueue(function (array $args) use (&$writes): mixed {
+                if ($args[0] === LuaScripts::later() || $args[0] === 'zadd') {
+                    $writes[] = $args;
+                }
+
+                return [];
+            });
+
+            Carbon::setTestNow(Carbon::createFromTimestamp((int) floor((float) $step['now'])));
+            try {
+                (new \ReflectionMethod($queue, 'laterRaw'))->invoke($queue, $step['delay'], $step['body'], $queueName);
+            } finally {
+                Carbon::setTestNow();
+            }
+
+            self::assertCount(1, $writes, 'one write to the delayed set');
+            self::assertSame('queues:' . $queueName . ':delayed', $writes[0][2], 'the delayed key');
+            self::assertSame($step['expect']['delayed'][0]['member'], $writes[0][4], 'the member is the body byte for byte');
+            self::assertSame($step['expect']['delayed'][0]['score'], (int) $writes[0][3], 'the score is floor(now) + ceil(delay)');
+            self::assertSame(0, (int) ($case['state']['notify'] ?? 0), 'a delayed push writes no notify token');
+        }, 'delayed_score');
     }
 
     /** §1.1: the Laravel-compatible key layout (`queues:<q>` + `:delayed` / `:reserved` / `:notify`). */
@@ -350,7 +405,7 @@ final class AdapterConformanceTest extends TestCase
             $push = $byScript(LuaScripts::push());
             // LuaScripts::later() only exists from Laravel 12; Laravel 11 delays with a plain ZADD.
             $later = method_exists(LuaScripts::class, 'later') ? $byScript(LuaScripts::later()) : $byScript('zadd');
-            $pop = $byScript(LuaScripts::pop());
+            $pop = $byScript(BabelQueueRedisQueue::popScript());
             self::assertNotSame([], $push, 'push reached Redis');
             self::assertNotSame([], $later, 'later reached Redis');
             self::assertNotSame([], $pop, 'pop reached Redis');
@@ -718,6 +773,10 @@ final class AdapterConformanceTest extends TestCase
     {
         $connection = Mockery::mock(RedisConnection::class);
         $connection->shouldReceive('eval')->andReturnUsing(static fn (...$args): mixed => $onEval($args));
+        // The driver's own scripts go through Connection::command('eval', [script, numKeys, ...args]) on a
+        // connection that is not phpredis (this mock); the argument list is the same shape as eval()'s.
+        $connection->shouldReceive('command')->with('eval', Mockery::type('array'))
+            ->andReturnUsing(static fn (string $method, array $args): mixed => $onEval($args));
         // Laravel 11's laterRaw() writes the delayed zset with ZADD instead of a Lua script; record it in the
         // eval shape (`['zadd', numkeys, key, ...]`) so callers read the key at the same index.
         $connection->shouldReceive('zadd')->andReturnUsing(static fn (...$args): mixed => $onEval(['zadd', 1, ...$args]));

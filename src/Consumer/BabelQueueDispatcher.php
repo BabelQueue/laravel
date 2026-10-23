@@ -106,6 +106,25 @@ final class BabelQueueDispatcher
     }
 
     /**
+     * Quarantine a poison body (one the reserve step could not decode, or whose `attempts` is not a
+     * number): publish it to the DLQ with reason `poison` and ack it. Returns false, touching nothing,
+     * when the DLQ is not enabled: the caller then fails the message so it is never dropped silently.
+     */
+    public function quarantinePoison(PolyglotMessage $message): bool
+    {
+        $deadLetter = $this->deadLetter();
+
+        if ($deadLetter === null || ! $deadLetter->enabled()) {
+            return false;
+        }
+
+        $deadLetter->publish($message, 'poison');
+        $message->delete();
+
+        return true;
+    }
+
+    /**
      * Run the per-delivery unit of work, deduped on the envelope's "meta.id" when a store is
      * configured. Reuses the php-sdk helpers as the single source of dedup logic:
      *   - a {@see ClaimingStore} drives {@see ClaimingDispatch::wrap()} (atomic in-flight claim →

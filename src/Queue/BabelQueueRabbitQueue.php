@@ -369,7 +369,9 @@ class BabelQueueRabbitQueue extends Queue implements QueueContract
             return null;
         }
 
-        return $decoded['meta']['id'] ?? $decoded['id'] ?? null;
+        $id = $decoded['meta']['id'] ?? $decoded['id'] ?? null;
+
+        return is_string($id) ? $id : null;
     }
 
     /** Lazily resolve (and memoise) an open channel, reconnecting if needed. */

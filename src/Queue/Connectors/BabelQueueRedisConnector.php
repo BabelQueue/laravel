@@ -29,7 +29,7 @@ class BabelQueueRedisConnector extends RedisConnector
             $this->redis,
             $config['queue'] ?? 'default',
             $config['connection'] ?? $this->connection,
-            $config['retry_after'] ?? 60,
+            $config['retry_after'] ?? 90,
             $config['block_for'] ?? null,
             $config['after_commit'] ?? false,
             $config['migration_batch_size'] ?? -1,
