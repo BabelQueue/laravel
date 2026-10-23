@@ -13,40 +13,37 @@ Conformance v1.6.0 (ADR-0033 / ADR-0034). The envelope stays at `schema_version:
 `conformance-known-gaps.json` is now empty.
 
 ### Fixed
-- **Poison detection and DLQ copy (ADR-0034 section 10).** `BabelQueueJob::isPoison()` now uses the reserve
-  script's own signal (`getReservedJob() === getRawBody()`, broker-bindings.md section 1.2) instead of re-reading the
+- **Poison detection and DLQ copy (ADR-0034 §10).** `BabelQueueJob::isPoison()` now uses the reserve
+  script's own signal (`getReservedJob() === getRawBody()`, broker-bindings.md §1.1) instead of re-reading the
   body with PHP `json_decode`, which disagrees with cjson on inputs such as `1e400`. The DLQ copy of a poison body
   is written byte-for-byte (`Consumer\PoisonCopy`): it never throws on invalid UTF-8 or `1e400`, keeps `{}` and
   big integers exact, and carries non-UTF-8 bytes as base64 with `raw_encoding: "base64"` (additive, ADR-0009).
-
-### Changed
-- **SQS / Artemis `attempts()` (sections 3.6 / 7.5).** `BabelQueueSqsJob::attempts()` is
-  `max(body.attempts, ApproximateReceiveCount - 1)` and `BabelQueueArtemisJob::attempts()` is
-  `max(body.attempts, delivery-count)`; an absent or non-numeric broker count is ignored. A first delivery
-  reads 0. This applies to `babelqueue-sqs` / `babelqueue-artemis` connections only; the standard `sqs`
-  driver and Laravel's own workers are untouched (GR-6). The Artemis republish still records `attempts + 1`.
-- **Redis connector defaults.** `babelqueue-redis` falls back to `retry_after = 90` and
-  `migration_batch_size = -1` when the connection omits them.
-- **Redis delay score.** Numeric delays are rounded up (`ceil`) so the delayed score is
-  `floor(now) + ceil(delay)` (section 1.2).
-- **Redis release body.** The released body is rebuilt with `attempts + 1` while preserving `{}` / `[]`, floats
-  and big integers in `data` (ADR-0031).
-
-### Fixed
-- **A1 poison bodies no longer loop or crash.** A reserved `{job, job}` poison body (undecodable, or
+- **Poison bodies no longer loop or crash.** A reserved `{job, job}` poison body (undecodable, or
   `attempts` not a number) is recognised by `BabelQueueJob`: `fire()` never reaches the handler, `attempts()`
   does not raise a `TypeError`, and the job is dead-lettered as `poison` (or failed when no dead-letter
   publisher is bound) and deleted from `:reserved` instead of being released forever. Standard Laravel jobs
   are unaffected (GR-6).
-- **Release keeps the body byte-for-byte.** `attempts` is rewritten in place at its literal span, so key
+- **Release keeps the body byte-for-byte (ADR-0031).** `attempts` is rewritten in place at its literal span, so key
   order, escaping, `{}` / `[]`, floats and big integers survive; a body that cannot be rewritten safely falls
   back to the stock release.
-- **Reserve Lua `pcall`-hardens the re-encode too**, not just the decode; the raw job is always placed in
-  `:reserved` first.
-- **Reserve Lua is `pcall`-hardened (section 1.2).** A body that fails to decode, or whose `attempts` is not a
-  number, is reserved raw and returned as `{job, job}` instead of failing after the `LPOP`.
+- **Reserve Lua is `pcall`-hardened (§1.1).** The decode and the re-encode both run under `pcall`, and the raw
+  job is always placed in `:reserved` first. A body that fails to decode, or whose `attempts` is not a number, is
+  reserved raw and returned as `{job, job}` instead of failing after the `LPOP`.
 - **Falsy reserved members.** A reserved member of `""` or `"0"` was dropped by the parent's truthiness test in
   `pop()`; it is now handed to the dispatcher so it can be dead-lettered.
+
+### Changed
+- **SQS / Artemis `attempts()` (broker-bindings §3.6 / §7.5).** `BabelQueueSqsJob::attempts()` is
+  `max(body.attempts, ApproximateReceiveCount - 1)` and `BabelQueueArtemisJob::attempts()` is
+  `max(body.attempts, delivery-count)`; an absent or non-numeric broker count is ignored. A first delivery
+  reads 0. This applies to `babelqueue-sqs` / `babelqueue-artemis` connections only; the standard `sqs`
+  driver and Laravel's own workers are untouched (GR-6). The Artemis republish still records `attempts + 1`.
+- **Redis connector defaults.** `babelqueue-redis` falls back to `retry_after = 90` (was 60)
+  when the connection omits it.
+- **Redis delay score.** Numeric delays are rounded up (`ceil`) so the delayed score is
+  `floor(now) + ceil(delay)` (§1.6).
+- **`pushRaw()` return value.** `BabelQueueRabbitQueue` and `BabelQueueArtemisQueue` now return `null` instead of
+  the id when `meta.id` is not a string.
 
 ### CI
 - The `test` job (`ci.yml`) and the `validate` job (`release.yml`) run a `redis:7` service with
@@ -55,7 +52,7 @@ Conformance v1.6.0 (ADR-0033 / ADR-0034). The envelope stays at `schema_version:
 - `BQ_CONFORMANCE_VERSION` is 1.6.0 in `ci.yml` and `release.yml`.
 
 ### Tests
-- New `tests/Feature/BabelQueuePoisonJobTest.php` (A1 poison path) and extended pop / release tests.
+- New `tests/Feature/BabelQueuePoisonJobTest.php` (poison path) and extended pop / release tests.
 - Vendored conformance v1.6.0; the `redis_delay` and `redis_layout` `delayed_score` cases run offline.
 - New `tests/Integration/RedisLayoutConformanceTest.php` runs the `redis_layout` `migrate` / `reserve` /
   `pcall_poison` / `release` blocks against a real Redis (`BABELQUEUE_TEST_REDIS`). Without Redis the blocks
