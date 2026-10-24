@@ -9,8 +9,12 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-24
+
 Conformance v1.6.0 (ADR-0033 / ADR-0034). The envelope stays at `schema_version: 1`;
 `conformance-known-gaps.json` is now empty.
+
+Requires `babelqueue/php-sdk` ^1.25.0.
 
 ### Changed
 - Poison DLQ record shape follows ADR-0035 (`PoisonCopy` already splices strict objects byte-for-byte and wraps the rest, base64 + `raw_encoding` only for invalid UTF-8; the consume-side invalid-UTF-8 poison detection is under Fixed). `AdapterConformanceTest` now runs the `poison_dlq` conformance section (43 cases).
