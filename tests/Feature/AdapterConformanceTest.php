@@ -350,8 +350,10 @@ final class AdapterConformanceTest extends TestCase
 
             /** @var list<array<int, mixed>> $writes */
             $writes = [];
-            $queue = $this->redisQueue(function (array $args) use (&$writes): mixed {
-                if ($args[0] === LuaScripts::later() || $args[0] === 'zadd') {
+            // LuaScripts::later() only exists from Laravel 12; Laravel 11 delays with a plain ZADD (same arg shape).
+            $laterScript = method_exists(LuaScripts::class, 'later') ? LuaScripts::later() : 'zadd';
+            $queue = $this->redisQueue(function (array $args) use (&$writes, $laterScript): mixed {
+                if ($args[0] === $laterScript || $args[0] === 'zadd') {
                     $writes[] = $args;
                 }
 
