@@ -12,7 +12,11 @@ The envelope wire format is versioned separately by `meta.schema_version`
 Conformance v1.6.0 (ADR-0033 / ADR-0034). The envelope stays at `schema_version: 1`;
 `conformance-known-gaps.json` is now empty.
 
+### Changed
+- Poison DLQ record shape follows ADR-0035 (`PoisonCopy` already splices strict objects byte-for-byte and wraps the rest, base64 + `raw_encoding` only for invalid UTF-8; the consume-side invalid-UTF-8 poison detection is under Fixed). `AdapterConformanceTest` now runs the `poison_dlq` conformance section (43 cases).
+
 ### Fixed
+- **Invalid UTF-8 is poison on the Redis consume path (broker-bindings §1.1, both layouts).** `BabelQueueJob::isPoison()` now also treats a raw body or reserved member that is not valid UTF-8 as poison. The reserve script (cjson) passes high bytes through, so such an envelope with a numeric `attempts` was reserved as a re-encoded member, missed the identity signal, fell into the unknown-URN path and could be written back to `:delayed` by a retry. It is now dead-lettered on first delivery with reason `poison` as the ADR-0035 base64 wrapper (`raw_encoding: "base64"`), never reaches a handler and is removed from `:reserved` by its exact reserved bytes.
 - **Poison detection and DLQ copy (ADR-0034 §10).** `BabelQueueJob::isPoison()` now uses the reserve
   script's own signal (`getReservedJob() === getRawBody()`, broker-bindings.md §1.1) instead of re-reading the
   body with PHP `json_decode`, which disagrees with cjson on inputs such as `1e400`. The DLQ copy of a poison body

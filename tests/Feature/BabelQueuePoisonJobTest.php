@@ -127,6 +127,53 @@ final class BabelQueuePoisonJobTest extends TestCase
         $this->assertFalse((new BabelQueueJob($this->app, Mockery::mock(BabelQueueRedisQueue::class), 'not-json', 'reserved-member', 'babelqueue-redis', 'orders'))->isPoison());
     }
 
+    /**
+     * broker-bindings.md section 1.1 (K-G): cjson decodes and re-encodes an envelope that carries invalid UTF-8
+     * with a numeric `attempts`, so the reserved member differs from the raw body. It is still poison: dead-lettered
+     * on first delivery as the ADR-0035 base64 wrapper, never dispatched, never released.
+     */
+    public function test_a_decodable_envelope_with_invalid_utf8_is_poison_dead_lettered_in_the_base64_wrapper(): void
+    {
+        $raw = "{\"job\":\"urn:bq:a:b\",\"attempts\":0,\"data\":{\"s\":\"\xff\xfe\"}}";
+        $reserved = "{\"job\":\"urn:bq:a:b\",\"attempts\":1,\"data\":{\"s\":\"\xff\xfe\"}}";
+
+        $handled = false;
+        $captured = null;
+        $queue = Mockery::mock(QueueContract::class);
+        $queue->shouldReceive('pushRaw')->once()->withArgs(function ($payload, $target) use (&$captured): bool {
+            $captured = ['body' => json_decode($payload, true), 'queue' => $target];
+
+            return true;
+        })->andReturn('x');
+        $factory = Mockery::mock(QueueFactory::class);
+        $factory->shouldReceive('connection')->andReturn($queue);
+        $this->app->instance(BabelQueueDispatcher::class, new BabelQueueDispatcher(
+            $this->app,
+            ['urn:bq:a:b' => static function () use (&$handled): void {
+                $handled = true;
+            }],
+            'fail',
+            0,
+            new DeadLetterPublisher($factory, ['enabled' => true]),
+        ));
+
+        $redis = $this->redisExpectingNoRelease(1);
+        $job = new BabelQueueJob($this->app, $redis, $raw, $reserved, 'babelqueue-redis', 'orders');
+
+        $this->assertTrue($job->isPoison());
+
+        $job->fire();
+
+        $this->assertFalse($handled, 'a handler must never see an invalid UTF-8 envelope');
+        $this->assertFalse($job->isReleased());
+        $this->assertTrue($job->isDeleted());
+        $this->assertNotNull($captured);
+        $this->assertSame('orders.dlq', $captured['queue']);
+        $this->assertSame('poison', $captured['body']['dead_letter']['reason']);
+        $this->assertSame('base64', $captured['body']['raw_encoding']);
+        $this->assertSame($raw, base64_decode($captured['body']['raw'], true), 'the stored bytes are carried exactly');
+    }
+
     #[\PHPUnit\Framework\Attributes\DataProvider('poisonBodies')]
     public function test_poison_body_takes_the_failed_path_when_the_dlq_is_disabled(string $body): void
     {

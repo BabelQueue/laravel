@@ -42,10 +42,17 @@ class BabelQueueJob extends RedisJob implements PolyglotMessage
      * poison element over untouched, so the reserved member is the raw body. A decodable envelope is reserved as
      * the re-encoded member with `attempts` incremented, which never equals the raw body. The body is not
      * re-interpreted in PHP: `json_decode` and cjson disagree on some inputs (e.g. `1e400`).
+     *
+     * One exception is made for invalid UTF-8 (broker-bindings.md section 1.1, both layouts): cjson passes high
+     * bytes through unvalidated, so the script reserves such an envelope as a re-encoded member and the
+     * identity signal above misses it. A raw body or a reserved member that is not valid UTF-8 is always poison,
+     * so it is never handed to a handler, never released and never written back with its bytes altered.
      */
     public function isPoison(): bool
     {
-        return $this->getReservedJob() === $this->getRawBody();
+        return $this->getReservedJob() === $this->getRawBody()
+            || preg_match('//u', $this->getRawBody()) !== 1
+            || preg_match('//u', $this->getReservedJob()) !== 1;
     }
 
     /**
