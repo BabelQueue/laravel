@@ -260,7 +260,11 @@ final class RedisLayoutConformanceTest extends TestCase
         }
     }
 
-    /** `{}` vs `[]` stay distinct because both sides are decoded without the assoc flag. */
+    /**
+     * `{}` vs `[]` stay distinct because both sides are decoded without the assoc flag. Object key order is
+     * not significant: the reserve Lua re-encodes the body with `cjson`, which emits keys in Lua table
+     * order, not in the producer's order (JSON objects are unordered; list order is kept).
+     */
     private function sameJson(mixed $want, string $gotRaw): bool
     {
         try {
@@ -269,7 +273,30 @@ final class RedisLayoutConformanceTest extends TestCase
             return false;
         }
 
-        return json_encode($want, JSON_PRESERVE_ZERO_FRACTION) === json_encode($got, JSON_PRESERVE_ZERO_FRACTION);
+        return json_encode($this->canonical($want), JSON_PRESERVE_ZERO_FRACTION)
+            === json_encode($this->canonical($got), JSON_PRESERVE_ZERO_FRACTION);
+    }
+
+    /** Sort object keys recursively; arrays (lists) keep their order and objects stay objects. */
+    private function canonical(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            return array_map(fn (mixed $item): mixed => $this->canonical($item), $value);
+        }
+
+        if ($value instanceof \stdClass) {
+            $members = get_object_vars($value);
+            ksort($members, SORT_STRING);
+
+            $out = new \stdClass();
+            foreach ($members as $key => $item) {
+                $out->{(string) $key} = $this->canonical($item);
+            }
+
+            return $out;
+        }
+
+        return $value;
     }
 
     /**
