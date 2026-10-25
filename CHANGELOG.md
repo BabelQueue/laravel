@@ -9,10 +9,14 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-25
+
 Implements ADR-0036 decisions 4 and 7 for the Laravel Redis driver (conformance v1.7.0, new core section
 `identity_verdict`). The envelope stays at `schema_version: 1`. Only `babelqueue-redis` connections change
 (Laravel RabbitMQ, SQS and Artemis behave as before; the standard `redis` connection is untouched). This is a
 **MINOR** with behaviour changes.
+
+Requires `babelqueue/php-sdk` ^1.26.0.
 
 ### Behaviour changes
 - **An identity-less body is poison on Redis, whatever `on_unknown_urn` says (broker-bindings §1.1, decision 4).**
