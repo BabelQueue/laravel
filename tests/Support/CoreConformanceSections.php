@@ -11,6 +11,9 @@ use BabelQueue\Exceptions\InvalidEnvelopeException;
 use BabelQueue\Idempotency\Idempotent;
 use BabelQueue\Idempotency\InMemoryStore;
 use BabelQueue\Schema\PayloadValidator;
+use BabelQueue\Queue\BabelQueueRedisQueue;
+use BabelQueue\Queue\Jobs\BabelQueueJob;
+use Mockery;
 
 /**
  * The broker-free conformance sections this adapter proves by delegating to the `babelqueue/php-sdk`
@@ -226,6 +229,28 @@ trait CoreConformanceSections
         ConformanceResults::each('job_type', function (\stdClass $case): void {
             $this->assertDecodeVerdict($case);
         }, objects: true);
+    }
+
+    /**
+     * `identity_verdict` (ADR-0036 decision 4), run through the Laravel Redis path's own identity decision:
+     * `BabelQueueJob::hasIdentity()` is what `fire()` acts on with the DLQ enabled (a body without a valid identity
+     * is dead-lettered as poison whatever `on_unknown_urn` says).
+     *
+     * Two things are outside this section. The reserve script's own poison signal (a body that is not an object with
+     * a numeric `attempts` is reserved untouched, `isPoison()`) is a separate, earlier Redis rule covered by
+     * `BabelQueuePoisonJobTest` and the live-Redis tests. And Laravel applies the identity rule only: the strict
+     * decoder's typed-member pass (a wrong-typed `trace_id` / `meta` / `data` / `attempts`) is not applied on this
+     * path, so those cases are listed in `conformance-known-gaps.json` (ADR-0036 decision 4 is scoped to
+     * identity-less bodies).
+     */
+    public function test_identity_verdict_cases(): void
+    {
+        ConformanceResults::each('identity_verdict', function (array $case): void {
+            $raw = (string) $case['body'];
+            $job = new BabelQueueJob($this->app, Mockery::mock(BabelQueueRedisQueue::class), $raw, $raw, 'babelqueue-redis', 'orders');
+
+            self::assertSame($case['expect'], $job->hasIdentity() ? 'ok' : 'poison', (string) $case['name']);
+        });
     }
 
     /**

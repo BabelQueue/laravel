@@ -1,3 +1,14 @@
 {
-  "gaps": []
+  "gaps": [
+    {
+      "section": "identity_verdict",
+      "case": "identity with wrong typed attempts",
+      "reason": "ADR-0036 decision 4 is scoped to identity-less bodies: the Laravel Redis path applies the identity rule only, not the strict decoder's typed-member pass. A body with a valid job and a non-numeric attempts is still poison on Redis through the reserve script (broker-bindings.md section 1.1); the typed-member pass for the other members is a later phase."
+    },
+    {
+      "section": "identity_verdict",
+      "case": "identity with wrong typed data",
+      "reason": "ADR-0036 decision 4 is scoped to identity-less bodies: the Laravel Redis path applies the identity rule only, not the strict decoder's typed-member pass (a list data with a valid job and a numeric attempts is handed to the handler). The typed-member pass is a later phase."
+    }
+  ]
 }

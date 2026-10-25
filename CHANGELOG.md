@@ -9,6 +9,42 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+Implements ADR-0036 decisions 4 and 7 for the Laravel Redis driver (conformance v1.7.0, new core section
+`identity_verdict`). The envelope stays at `schema_version: 1`. Only `babelqueue-redis` connections change
+(Laravel RabbitMQ, SQS and Artemis behave as before; the standard `redis` connection is untouched). This is a
+**MINOR** with behaviour changes.
+
+### Behaviour changes
+- **An identity-less body is poison on Redis, whatever `on_unknown_urn` says (broker-bindings §1.1, decision 4).**
+  With the dead-letter queue enabled, a body that has neither a valid `job` nor a valid `urn` (the conformance
+  `identity_verdict` rule) is written to `<queue>.dlq` as the ADR-0035 record with `reason: "poison"` and removed
+  from `:reserved`; it never reaches a handler or the unknown-URN strategies (`delete`, `release`, `fail` and
+  `dead_letter` all behave the same for it). Before, it took the `on_unknown_urn` path (for `delete` it was dropped,
+  for `fail` it was retried). A valid envelope whose URN has no handler is unchanged. With the DLQ disabled nothing
+  changes (the existing `failed_jobs` known gap).
+- **A failed dead-letter write no longer moves the message to `:delayed` (broker-bindings §1.7, decision 7).** When the
+  DLQ write throws (a poison body, a version-gated body, `on_unknown_urn: dead_letter`, or retries exhausted), the
+  reservation is neither acknowledged nor released: the member stays in `:reserved`, the failure is logged and the
+  new `BabelQueue\Consumer\DeadLetterWriteFailed` is rethrown for the worker to report, and the `retry_after`
+  recovery brings the message back (counting an attempt) to try the write again. Before, the exception reached
+  Laravel's worker, which called `deleteAndRelease` and retried the message through `:delayed` (a poison body was
+  re-run against a handler that cannot take it). With `retry_after: null` the member stays in `:reserved` until an
+  operator acts.
+- **The `failed` DLQ record is written before the reservation is deleted** (`BabelQueueJob::fail()`). Laravel deletes
+  first, so a failed write used to lose the message; now it stays in `:reserved`. The handler's `failed()` hook and the
+  `JobFailed` event are unchanged, and the record is written once.
+
+### Added
+- `BabelQueue\Consumer\DeadLetterWriteFailed`: thrown by `DeadLetterPublisher::publish()` when the write to the
+  dead-letter queue fails (the original exception is `getPrevious()`).
+- `BabelQueueDispatcher::deadLetterFailure()` and a `$deadLettered` argument on `BabelQueueDispatcher::fail()`.
+- `BabelQueueJob::hasIdentity()`, the identity rule `fire()` acts on. The `identity_verdict` conformance runner runs
+  through it; 2 of its 97 cases (a wrong-typed `attempts` or `data` next to a valid identity) are listed in
+  `conformance-known-gaps.json`: Laravel applies the identity rule only, not the strict decoder's typed-member
+  pass (ADR-0036 decision 4 is scoped to identity-less bodies).
+- A live-Redis integration test for both behaviours and the `identity_verdict` conformance runner; the vendored suite
+  and the workflow pins move to conformance v1.7.0.
+
 ## [1.8.0] - 2026-10-24
 
 Conformance v1.6.0 (ADR-0033 / ADR-0034). The envelope stays at `schema_version: 1`;

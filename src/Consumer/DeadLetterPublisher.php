@@ -45,6 +45,8 @@ final class DeadLetterPublisher
      * "dead_letter" block. No-op when DLQ is disabled.
      *
      * @param  string  $reason  Machine-readable cause: failed | unknown_urn | poison.
+     *
+     * @throws DeadLetterWriteFailed When the write to the dead-letter queue fails.
      */
     public function publish(PolyglotMessage $message, string $reason, ?Throwable $e = null): void
     {
@@ -70,9 +72,17 @@ final class DeadLetterPublisher
                 EnvelopeCodec::SOURCE_LANG,
             ));
 
-        $connection = $this->config['connection'] ?? $message->getConnectionName();
+        $target = $this->target($message);
 
-        $this->queue->connection($connection)->pushRaw($body, $this->target($message));
+        try {
+            $connection = $this->config['connection'] ?? $message->getConnectionName();
+
+            $this->queue->connection($connection)->pushRaw($body, $target);
+        } catch (Throwable $writeError) {
+            // A failed write is its own failure type: the Redis consume job leaves the reservation in
+            // `:reserved` for it instead of releasing the message (ADR-0036 decision 7).
+            throw DeadLetterWriteFailed::forQueue($target, $reason, $writeError);
+        }
     }
 
     /**
