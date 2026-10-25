@@ -125,6 +125,18 @@ final class BabelQueueDispatcher
     }
 
     /**
+     * Write the `failed` dead-letter record of a message whose retries are exhausted (a no-op unless the
+     * DLQ is enabled). The Redis job calls this BEFORE it deletes the reservation, so that a failed write
+     * leaves the member in `:reserved` (ADR-0036 decision 7).
+     *
+     * @throws DeadLetterWriteFailed When the DLQ is enabled and the write fails.
+     */
+    public function deadLetterFailure(PolyglotMessage $message, ?Throwable $e): void
+    {
+        $this->deadLetter()?->publish($message, 'failed', $e);
+    }
+
+    /**
      * Run the per-delivery unit of work, deduped on the envelope's "meta.id" when a store is
      * configured. Reuses the php-sdk helpers as the single source of dedup logic:
      *   - a {@see ClaimingStore} drives {@see ClaimingDispatch::wrap()} (atomic in-flight claim →
@@ -160,10 +172,16 @@ final class BabelQueueDispatcher
      * Forward a permanent failure to the handler's failed() hook, if it has one,
      * and route the message to the cross-language dead-letter queue (a no-op
      * unless DLQ is enabled). Called once the worker exhausts its retries.
+     *
+     * @param  bool  $deadLettered  The caller already wrote the `failed` DLQ record through
+     *                              {@see self::deadLetterFailure()} (the Redis job does so before it
+     *                              deletes the reservation); only the handler hook runs then.
      */
-    public function fail(PolyglotMessage $message, ?Throwable $e): void
+    public function fail(PolyglotMessage $message, ?Throwable $e, bool $deadLettered = false): void
     {
-        $this->deadLetter()?->publish($message, 'failed', $e);
+        if (! $deadLettered) {
+            $this->deadLetterFailure($message, $e);
+        }
 
         // An unsupported-version envelope never reached a handler, so there is no failed() hook to run.
         if (! self::supportsSchemaVersion($message)) {

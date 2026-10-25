@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace BabelQueue\Queue\Jobs;
 
 use BabelQueue\Consumer\BabelQueueDispatcher;
+use BabelQueue\Consumer\DeadLetterWriteFailed;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\Exceptions\InvalidEnvelopeException;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
 use Illuminate\Queue\Jobs\RedisJob;
+use Throwable;
 
 /**
  * A Redis-backed consume job for polyglot messages.
@@ -22,11 +24,18 @@ use Illuminate\Queue\Jobs\RedisJob;
  *     instead of resolving payload['job'] as a PHP class;
  *   - poison handling (broker-bindings.md section 1.1, ADR-0033): the reserve script hands over a body that
  *     does not decode to an object with a numeric `attempts` untouched, and such a body is quarantined
- *     (DLQ `poison`, else the failed path) and removed from `:reserved` instead of being retried forever.
+ *     (DLQ `poison`, else the failed path) and removed from `:reserved` instead of being retried forever;
+ *   - an identity-less body (neither a valid `job` nor a valid `urn`) is poison too, with the DLQ enabled, whatever
+ *     `on_unknown_urn` says (broker-bindings.md section 1.1, ADR-0036 decision 4);
+ *   - a failed dead-letter write never reaches the worker's release (ADR-0036 decision 7, broker-bindings.md
+ *     section 1.7): the reservation stays in `:reserved` and the `retry_after` recovery brings it back.
  */
 class BabelQueueJob extends RedisJob implements PolyglotMessage
 {
     use ParsesPolyglotEnvelope;
+
+    /** Whether {@see fail()} already wrote the `failed` DLQ record, so {@see failed()} does not repeat it. */
+    private bool $deadLettered = false;
 
     /**
      * Prefer the polyglot meta.id as the job identifier, falling back to the
@@ -56,17 +65,110 @@ class BabelQueueJob extends RedisJob implements PolyglotMessage
     }
 
     /**
+     * Whether the body carries a valid identity (a valid `job`, else a valid `urn` alias; ADR-0032 section 6).
+     * A body without one is poison on Redis with the DLQ enabled (ADR-0036 decision 4); see {@see fire()}.
+     */
+    public function hasIdentity(): bool
+    {
+        return $this->getUrn() !== '';
+    }
+
+    /**
      * Run the job. A poison body is quarantined, never dispatched to a handler and never released.
+     *
+     * An identity-less body (no valid `job` and no valid `urn`) is poison as well when the DLQ is enabled: it
+     * is written to the DLQ with reason `poison` (the ADR-0035 record) whatever `on_unknown_urn` is, and never
+     * reaches the handler / unknown-URN path. With the DLQ disabled nothing changes (the existing known gap).
+     *
+     * If the dead-letter write itself fails, the reservation is left in `:reserved` (see {@see keepReserved()}).
      */
     public function fire()
     {
-        if ($this->isPoison()) {
-            $this->quarantine();
+        $dispatcher = $this->container->make(BabelQueueDispatcher::class);
 
+        try {
+            if ($this->isPoison()) {
+                $this->quarantine();
+
+                return;
+            }
+
+            if (! $this->hasIdentity() && $dispatcher->quarantinePoison($this)) {
+                return;
+            }
+
+            $dispatcher->dispatch($this);
+        } catch (DeadLetterWriteFailed $e) {
+            $this->keepReserved($e);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Permanent failure (the worker exhausted the retries, or the handler failed the job). The `failed`
+     * dead-letter record is written BEFORE the reservation is deleted: Laravel's own order deletes first, so a
+     * failed write would lose the message. If the write fails the reservation stays in `:reserved` and the
+     * exception is rethrown (ADR-0036 decision 7).
+     *
+     * @param  \Throwable|string|null  $e
+     */
+    public function fail($e = null)
+    {
+        if (! $this->isDeleted()) {
+            try {
+                $this->container->make(BabelQueueDispatcher::class)
+                    ->deadLetterFailure($this, $e instanceof Throwable ? $e : null);
+                $this->deadLettered = true;
+            } catch (DeadLetterWriteFailed $writeFailed) {
+                $this->keepReserved($writeFailed, $e instanceof Throwable ? $e : null);
+
+                throw $writeFailed;
+            }
+        }
+
+        parent::fail($e);
+    }
+
+    /**
+     * Run the handler's `failed()` hook; the DLQ record was already written by {@see fail()}.
+     *
+     * @param  \Throwable|null  $e
+     */
+    protected function failed($e)
+    {
+        $this->container->make(BabelQueueDispatcher::class)
+            ->fail($this, $e instanceof Throwable ? $e : null, $this->deadLettered);
+    }
+
+    /**
+     * A dead-letter write failed: neither acknowledge nor release the reservation. Marking the job failed makes
+     * Laravel's worker skip its `release()` (which would `deleteAndRelease` it to `:delayed`), and nothing deletes
+     * it, so the member stays in `:reserved` until the `retry_after` recovery moves it back (counting an attempt)
+     * and the write is tried again. The failure is logged here and the caller rethrows it, so the worker reports it.
+     */
+    private function keepReserved(DeadLetterWriteFailed $writeFailed, ?Throwable $cause = null): void
+    {
+        $this->markAsFailed();
+
+        if (! $this->container->bound('log')) {
             return;
         }
 
-        $this->container->make(BabelQueueDispatcher::class)->dispatch($this);
+        try {
+            $this->container->make('log')->error(
+                'BabelQueue: the dead-letter write failed; the message stays in :reserved until the retry_after recovery',
+                [
+                    'queue' => $this->getQueue(),
+                    'job_id' => $this->getJobId(),
+                    'urn' => $this->getUrn(),
+                    'error' => $writeFailed->getMessage(),
+                    'cause' => $cause?->getMessage(),
+                ],
+            );
+        } catch (Throwable) {
+            // Logging must never turn a kept reservation into a lost one.
+        }
     }
 
     /**
