@@ -211,6 +211,24 @@ final class BabelQueueDeadLetterFailureTest extends TestCase
         $this->assertSame([], $this->trace);
     }
 
+    public function test_the_laravel_exception_is_the_cores_exception_with_the_reason_kept(): void
+    {
+        $cause = new RuntimeException('dlq broker is down');
+        $e = DeadLetterWriteFailed::forQueue('orders.dlq', 'poison', $cause);
+
+        $this->assertInstanceOf(\BabelQueue\Consume\DeadLetterWriteFailed::class, $e);
+        $this->assertInstanceOf(\BabelQueue\Exceptions\BabelQueueException::class, $e);
+        $this->assertSame('Writing the dead-letter record (reason "poison") to [orders.dlq] failed: dlq broker is down', $e->getMessage());
+        $this->assertSame($cause, $e->getPrevious());
+
+        // the core's two-argument form keeps working, and a failure is required
+        $core = DeadLetterWriteFailed::forQueue('orders.dlq', $cause);
+        $this->assertInstanceOf(DeadLetterWriteFailed::class, $core);
+        $this->assertSame('Writing the dead-letter record to [orders.dlq] failed: dlq broker is down', $core->getMessage());
+        $this->expectException(\InvalidArgumentException::class);
+        DeadLetterWriteFailed::forQueue('orders.dlq', 'poison');
+    }
+
     public function test_a_failed_unknown_urn_dead_letter_write_keeps_the_reservation(): void
     {
         $this->useDeadLetterQueue('dead_letter', true, $this->dlqDown());

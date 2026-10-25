@@ -36,7 +36,8 @@ Implements ADR-0036 decisions 4 and 7 for the Laravel Redis driver (conformance 
 
 ### Added
 - `BabelQueue\Consumer\DeadLetterWriteFailed`: thrown by `DeadLetterPublisher::publish()` when the write to the
-  dead-letter queue fails (the original exception is `getPrevious()`).
+  dead-letter queue fails (the original exception is `getPrevious()`). It extends the core's
+  `BabelQueue\Consume\DeadLetterWriteFailed` (php-sdk 1.26), so a handler for the core type catches it too.
 - `BabelQueueDispatcher::deadLetterFailure()` and a `$deadLettered` argument on `BabelQueueDispatcher::fail()`.
 - `BabelQueueJob::hasIdentity()`, the identity rule `fire()` acts on. The `identity_verdict` conformance runner runs
   through it; 2 of its 97 cases (a wrong-typed `attempts` or `data` next to a valid identity) are listed in
