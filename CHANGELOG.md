@@ -9,6 +9,8 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-26
+
 Aligns the conformance report with ADR-0037 (conformance v1.8.0). **One default changes**: the DLQ name on
 Amazon SQS connections (`babelqueue-sqs` or stock `sqs`; `<queue>-dlq` instead of `<queue>.dlq`, see Fixed; create that queue before upgrading, or
 set `dead_letter.suffix` to `.dlq` explicitly). The version-gate and `failed_jobs` behaviour is unchanged, and the
