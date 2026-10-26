@@ -9,8 +9,22 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
-Aligns the conformance report with ADR-0037 (conformance v1.8.0). **No behaviour changes**: nothing under `src/`
-changes, and the envelope stays at `schema_version: 1`.
+Aligns the conformance report with ADR-0037 (conformance v1.8.0). **One default changes**: the DLQ name on
+Amazon SQS connections (`babelqueue-sqs` or stock `sqs`; `<queue>-dlq` instead of `<queue>.dlq`, see Fixed; create that queue before upgrading, or
+set `dead_letter.suffix` to `.dlq` explicitly). The version-gate and `failed_jobs` behaviour is unchanged, and the
+envelope stays at `schema_version: 1`.
+
+### Fixed
+- **The default DLQ name on Amazon SQS is `<queue>-dlq` (FIFO: `<queue>-dlq.fifo`), not `<queue>.dlq` (ADR-0037
+  decision 7).** An SQS queue name cannot contain a dot, so the built-in `.dlq` name could never be created on SQS.
+  Only an Amazon SQS DLQ destination changes (`babelqueue-sqs`, or Laravel's stock `sqs` connection when
+  `dead_letter.connection` points at it; stock `sqs` jobs, workers and `failed_jobs` are untouched, GR-6); Redis,
+  RabbitMQ and Artemis keep `<queue>.dlq`. The default is the destination's: `dead_letter.suffix` is now `null` in `config/babelqueue.php` (the driver default), and an unset
+  suffix resolves to `-dlq` when the DLQ connection is an Amazon SQS one (`babelqueue-sqs` or Laravel's stock `sqs`), `.dlq` otherwise. An explicit
+  `dead_letter.queue` or `dead_letter.suffix` is used as written (a published config that still carries
+  `'suffix' => '.dlq'` keeps `.dlq`; set `null` or `'-dlq'` on SQS). On SQS a FIFO queue keeps `.fifo` last
+  (`orders.fifo` -> `orders-dlq.fifo`, also for an explicit suffix), and a queue URL gets the suffix on its last
+  segment. A deployment that sets the old name explicitly (`'suffix' => '.dlq'`) keeps it. The wire is unchanged.
 
 ### Changed
 - The vendored conformance suite and the workflow pin move to conformance v1.8.0.

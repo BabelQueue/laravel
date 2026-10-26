@@ -8,6 +8,7 @@ use BabelQueue\Codec\EnvelopeCodec;
 use BabelQueue\Contracts\PolyglotMessage;
 use BabelQueue\DeadLetter\DeadLetter;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
+use Illuminate\Queue\SqsQueue;
 use Throwable;
 
 /**
@@ -27,7 +28,8 @@ final class DeadLetterPublisher
 {
     /**
      * @param  array<string, mixed>  $config  The "dead_letter" config block:
-     *   enabled (bool), connection (?string), queue (?string), suffix (string).
+     *   enabled (bool), connection (?string), queue (?string), suffix (?string). A null / absent suffix
+     *   is the driver default: "-dlq" on an Amazon SQS connection (`babelqueue-sqs` or the stock `sqs`, ADR-0037 decision 7), ".dlq" elsewhere.
      */
     public function __construct(
         private QueueFactory $queue,
@@ -72,30 +74,44 @@ final class DeadLetterPublisher
                 EnvelopeCodec::SOURCE_LANG,
             ));
 
-        $target = $this->target($message);
+        $target = null;
 
         try {
             $connection = $this->config['connection'] ?? $message->getConnectionName();
 
-            $this->queue->connection($connection)->pushRaw($body, $target);
+            $destination = $this->queue->connection($connection);
+            $target = $this->target($message, $destination instanceof SqsQueue);
+
+            $destination->pushRaw($body, $target);
         } catch (Throwable $writeError) {
             // A failed write is its own failure type: the Redis consume job leaves the reservation in
             // `:reserved` for it instead of releasing the message (ADR-0036 decision 7).
-            throw DeadLetterWriteFailed::forQueue($target, $reason, $writeError);
+            throw DeadLetterWriteFailed::forQueue($target ?? $this->target($message, false), $reason, $writeError);
         }
     }
 
     /**
-     * Resolve the dead-letter queue name: an explicit configured queue, else the
-     * original queue with the configured suffix (default ".dlq").
+     * Resolve the dead-letter queue name: an explicit configured queue, else the original queue with the
+     * configured suffix. An unset suffix is the default of the destination: ".dlq", except on Amazon SQS, whose
+     * queue names cannot hold a dot, where it is "-dlq" (ADR-0037 decision 7). On SQS a FIFO queue keeps `.fifo`
+     * last (`orders.fifo` -> `orders-dlq.fifo`); the original queue may be a name or a queue URL, the suffix is
+     * appended to its last segment either way.
      */
-    private function target(PolyglotMessage $message): string
+    private function target(PolyglotMessage $message, bool $sqs): string
     {
         if (! empty($this->config['queue'])) {
             return (string) $this->config['queue'];
         }
 
-        return $message->getQueue() . ((string) ($this->config['suffix'] ?? '.dlq'));
+        $queue = (string) $message->getQueue();
+        $suffix = $this->config['suffix'] ?? null;
+        $suffix = $suffix === null ? ($sqs ? '-dlq' : '.dlq') : (string) $suffix;
+
+        if ($sqs && str_ends_with($queue, '.fifo')) {
+            return substr($queue, 0, -strlen('.fifo')) . $suffix . '.fifo';
+        }
+
+        return $queue . $suffix;
     }
 
     /**

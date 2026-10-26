@@ -6,12 +6,14 @@ namespace BabelQueue\Tests\Feature;
 
 use BabelQueue\Consumer\DeadLetterPublisher;
 use BabelQueue\Contracts\PolyglotMessage;
+use BabelQueue\Queue\BabelQueueSqsQueue;
 use BabelQueue\Queue\Concerns\ParsesPolyglotEnvelope;
 use BabelQueue\Tests\TestCase;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Queue\Jobs\Job;
+use Illuminate\Queue\SqsQueue;
 use Mockery;
 use RuntimeException;
 
@@ -134,6 +136,92 @@ final class DeadLetterPublisherTest extends TestCase
 
         $dlq = new DeadLetterPublisher($factory, ['enabled' => true, 'queue' => 'failures']);
         $dlq->publish($this->message('orders', 'bq-redis', '{"job":"u","data":{},"meta":{},"attempts":1}'), 'failed');
+    }
+
+    private const BODY = '{"job":"urn:babel:orders:created","trace_id":"t1","data":{},"meta":{"id":"m1"},"attempts":1}';
+
+    /**
+     * Publish `$body` through a publisher whose destination connection is `$destination`, returning the DLQ
+     * queue name that `pushRaw()` received.
+     *
+     * @param  class-string<QueueContract>  $destination
+     * @param  array<string, mixed>  $config
+     */
+    private function dlqTarget(string $destination, string $originalQueue, array $config = []): string
+    {
+        $target = null;
+        $queue = Mockery::mock($destination);
+        $queue->shouldReceive('pushRaw')->once()->withArgs(function ($payload, $q) use (&$target): bool {
+            $target = $q;
+
+            return true;
+        })->andReturn('x');
+
+        $factory = Mockery::mock(QueueFactory::class);
+        $factory->shouldReceive('connection')->once()->andReturn($queue);
+
+        (new DeadLetterPublisher($factory, ['enabled' => true] + $config))
+            ->publish($this->message($originalQueue, 'bq-conn', self::BODY), 'failed');
+
+        return (string) $target;
+    }
+
+    public function test_the_sqs_default_dlq_name_is_queue_dash_dlq(): void
+    {
+        $this->assertSame('orders-dlq', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders'));
+        $this->assertSame('orders-dlq', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders', ['suffix' => null]));
+    }
+
+    public function test_the_sqs_default_dlq_name_of_a_fifo_queue_keeps_fifo_last(): void
+    {
+        $this->assertSame('orders-dlq.fifo', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders.fifo'));
+    }
+
+    public function test_the_sqs_default_applies_to_the_last_segment_of_a_queue_url(): void
+    {
+        $this->assertSame(
+            'https://sqs.eu-west-1.amazonaws.com/123456789012/orders-dlq',
+            $this->dlqTarget(BabelQueueSqsQueue::class, 'https://sqs.eu-west-1.amazonaws.com/123456789012/orders'),
+        );
+        $this->assertSame(
+            'https://sqs.eu-west-1.amazonaws.com/123456789012/orders-dlq.fifo',
+            $this->dlqTarget(BabelQueueSqsQueue::class, 'https://sqs.eu-west-1.amazonaws.com/123456789012/orders.fifo'),
+        );
+    }
+
+    public function test_the_stock_laravel_sqs_driver_gets_the_sqs_default_too(): void
+    {
+        $this->assertSame('orders-dlq', $this->dlqTarget(SqsQueue::class, 'orders'));
+        $this->assertSame('orders-dlq.fifo', $this->dlqTarget(SqsQueue::class, 'orders.fifo'));
+    }
+
+    public function test_an_explicit_suffix_on_a_fifo_queue_goes_before_dot_fifo(): void
+    {
+        // `orders.fifo` + `-dlq` as written would be `orders.fifo-dlq`, a name SQS cannot create.
+        $this->assertSame('orders-dlq.fifo', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders.fifo', ['suffix' => '-dlq']));
+        $this->assertSame('orders_dead.fifo', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders.fifo', ['suffix' => '_dead']));
+    }
+
+    public function test_an_explicit_suffix_or_queue_name_wins_on_sqs(): void
+    {
+        $this->assertSame('orders.dlq', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders', ['suffix' => '.dlq']));
+        $this->assertSame('orders_dead', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders', ['suffix' => '_dead']));
+        $this->assertSame('orders_dead.fifo', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders.fifo', ['suffix' => '_dead']));
+        $this->assertSame('failures', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders', ['queue' => 'failures']));
+        $this->assertSame('failures.fifo', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders.fifo', ['queue' => 'failures.fifo']));
+    }
+
+    public function test_every_other_driver_keeps_the_dot_dlq_default(): void
+    {
+        $this->assertSame('orders.dlq', $this->dlqTarget(QueueContract::class, 'orders'));
+        $this->assertSame('orders.dlq', $this->dlqTarget(QueueContract::class, 'orders', ['suffix' => null]));
+        $this->assertSame('orders.fifo.dlq', $this->dlqTarget(QueueContract::class, 'orders.fifo'));
+    }
+
+    public function test_the_default_follows_the_destination_connection_not_the_source(): void
+    {
+        // A message from a Redis connection dead-lettered onto an SQS connection gets the SQS name.
+        $this->assertSame('orders-dlq', $this->dlqTarget(BabelQueueSqsQueue::class, 'orders', ['connection' => 'bq-sqs']));
     }
 
     private function message(string $queue, string $connection, string $body): PolyglotMessage
