@@ -9,6 +9,41 @@ The envelope wire format is versioned separately by `meta.schema_version`
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-26
+
+Aligns the conformance report with ADR-0037 (conformance v1.8.0). **One default changes**: the DLQ name on
+Amazon SQS connections (`babelqueue-sqs` or stock `sqs`; `<queue>-dlq` instead of `<queue>.dlq`, see Fixed; create that queue before upgrading, or
+set `dead_letter.suffix` to `.dlq` explicitly). The version-gate and `failed_jobs` behaviour is unchanged, and the
+envelope stays at `schema_version: 1`.
+
+### Fixed
+- **The default DLQ name on Amazon SQS is `<queue>-dlq` (FIFO: `<queue>-dlq.fifo`), not `<queue>.dlq` (ADR-0037
+  decision 7).** An SQS queue name cannot contain a dot, so the built-in `.dlq` name could never be created on SQS.
+  Only an Amazon SQS DLQ destination changes (`babelqueue-sqs`, or Laravel's stock `sqs` connection when
+  `dead_letter.connection` points at it; stock `sqs` jobs, workers and `failed_jobs` are untouched, GR-6); Redis,
+  RabbitMQ and Artemis keep `<queue>.dlq`. The default is the destination's: `dead_letter.suffix` is now `null` in `config/babelqueue.php` (the driver default), and an unset
+  suffix resolves to `-dlq` when the DLQ connection is an Amazon SQS one (`babelqueue-sqs` or Laravel's stock `sqs`), `.dlq` otherwise. An explicit
+  `dead_letter.queue` or `dead_letter.suffix` is used as written (a published config that still carries
+  `'suffix' => '.dlq'` keeps `.dlq`; set `null` or `'-dlq'` on SQS). On SQS a FIFO queue keeps `.fifo` last
+  (`orders.fifo` -> `orders-dlq.fifo`, also for an explicit suffix), and a queue URL gets the suffix on its last
+  segment. A deployment that sets the old name explicitly (`'suffix' => '.dlq'`) keeps it. The wire is unchanged.
+
+### Changed
+- The vendored conformance suite and the workflow pin move to conformance v1.8.0.
+- **Version-gate sections (ADR-0037 decision 4, the Laravel exception, GR-6).** The `babelqueue-sqs` and Artemis
+  drivers keep handling a version-gated delivery in `BabelQueueDispatcher` (with the DLQ enabled an envelope with a
+  `dead_letter` block, `reason: "poison"`, is published and the delivery acked; with it disabled the worker's retry and
+  then `failed_jobs` take it; `on_unknown_urn` is ignored), so they do not follow the ADR-0037 settle rule (the raw
+  body to `<queue>.dlq`). A DLQ reader must not assume a Laravel-written record of a version-gated delivery holds the
+  original bytes. Every case of `version_gate_sqs` and `version_gate_artemis` is reported as `skip` with the reason
+  `ADR-0037 decision 4` (`tests/Feature/VersionGateConformanceTest.php`); `version_gate_pulsar` and
+  `version_gate_asb` are absent (no such binding in this package).
+- **`failed_jobs` with the DLQ disabled is a recorded exception (ADR-0037 decision 4).** A poison body and an
+  exhausted job on a `babelqueue-*` connection with the BabelQueue DLQ off are failed into Laravel's `failed_jobs`
+  (`php artisan queue:failed` / `queue:retry` keep them inspectable); with the DLQ enabled they are dead-lettered as
+  the ADR-0035 record, as before. The exception is now recorded in `conformance-known-gaps.json` (`exceptions`,
+  informational: no conformance case exercises the DLQ-disabled path, so it is not a failing case).
+
 ## [1.9.0] - 2026-10-25
 
 Implements ADR-0036 decisions 4 and 7 for the Laravel Redis driver (conformance v1.7.0, new core section

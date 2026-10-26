@@ -130,7 +130,10 @@ return [
     |   enabled    — turn the cross-language DLQ on/off (off by default)
     |   connection — connection to publish the DLQ onto (null = the message's own)
     |   queue      — explicit DLQ name (null = original queue name + 'suffix')
-    |   suffix     — appended to the original queue name when 'queue' is null
+    |   suffix     — appended to the original queue name when 'queue' is null;
+    |                null = the driver default: '-dlq' on an Amazon SQS
+    |                connection (babelqueue-sqs or stock sqs; an SQS name cannot contain a dot; FIFO is
+    |                '<queue>-dlq.fifo'), '.dlq' on every other driver
     |
     */
 
@@ -138,7 +141,7 @@ return [
         'enabled' => env('BABELQUEUE_DLQ_ENABLED', false),
         'connection' => null,
         'queue' => null,
-        'suffix' => '.dlq',
+        'suffix' => null,
     ],
 
 ];

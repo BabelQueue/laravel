@@ -10,5 +10,17 @@
       "case": "identity with wrong typed data",
       "reason": "ADR-0036 decision 4 is scoped to identity-less bodies: the Laravel Redis path applies the identity rule only, not the strict decoder's typed-member pass (a list data with a valid job and a numeric attempts is handed to the handler). The typed-member pass is a later phase."
     }
+  ],
+  "exceptions": [
+    {
+      "scope": "babelqueue-* connections with the BabelQueue DLQ disabled",
+      "behaviour": "A poison body and a job whose retries are exhausted are failed into Laravel's `failed_jobs` instead of being dead-lettered (broker-bindings.md section 1.1 says a Redis poison body is dead-lettered in every configuration). With the DLQ enabled the poison body is dead-lettered as the ADR-0035 record with reason \"poison\".",
+      "reason": "ADR-0037 decision 4: a normative exception to the \"dead-lettered in every configuration\" rule (GR-6, Laravel's native failure store is the framework's quarantine). No conformance case exercises the DLQ-disabled path, so this is not a failing case and is not listed under `gaps`; this entry is informational and is not read by the known-gaps gate."
+    },
+    {
+      "scope": "babelqueue-sqs and babelqueue-artemis, version-gated deliveries (sections version_gate_sqs and version_gate_artemis)",
+      "behaviour": "BabelQueueDispatcher::handleUnsupportedSchemaVersion() keeps its own handling: with the DLQ enabled an envelope with a `dead_letter` block (reason \"poison\") is published and the delivery acked, not the raw body of the ADR-0037 settle rule; with the DLQ disabled it throws InvalidEnvelopeException so the worker's retry and then `failed_jobs` take it; `on_unknown_urn` is ignored. Every case of both sections is reported as `skip` with the reason `ADR-0037 decision 4`, not as a `fail`.",
+      "reason": "ADR-0037 decision 4 (the Laravel exception extended to the version-gate path). A skip is the explicit, ADR-backed result, so these cases are not known gaps."
+    }
   ]
 }

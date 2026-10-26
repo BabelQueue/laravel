@@ -171,7 +171,7 @@ lands here). The `meta.schema_version` check runs **before** URN routing and is
 independent of this setting: an envelope whose `meta.schema_version` is absent or
 not `1` is never handed to a handler and never reaches `on_unknown_urn` — even
 with `delete`, `release` or `dead_letter`. With the dead-letter queue enabled it
-is published to the configured DLQ (default `<queue>.dlq`) with reason `poison` and acked; otherwise an
+is published to the configured DLQ (default `<queue>.dlq`; `<queue>-dlq` on SQS) with reason `poison` and acked; otherwise an
 `InvalidEnvelopeException` (`unsupported_schema_version`) is thrown so the
 worker's retry / `failed_jobs` path records it.
 
@@ -201,9 +201,17 @@ Enable in `config/babelqueue.php`:
 ```php
 'dead_letter' => [
     'enabled' => true,
-    'suffix'  => '.dlq',   // failures from "orders" go to "orders.dlq"
+    // 'suffix' => null (default): failures from "orders" go to "orders.dlq",
+    // or to "orders-dlq" when the DLQ connection is Amazon SQS.
 ],
 ```
+
+On Amazon SQS a queue name cannot contain a dot, so when the DLQ connection is an Amazon SQS one (`babelqueue-sqs`, or
+the stock `sqs` connection named in `dead_letter.connection`) the DLQ defaults to `<queue>-dlq`
+(FIFO: `<queue>-dlq.fifo`; ADR-0037 decision 7): create that queue. Every other driver keeps `<queue>.dlq`. An explicit
+`'queue'` or `'suffix'` in the `dead_letter` block always wins (on a FIFO queue the suffix goes before `.fifo`:
+`orders.fifo` + `'_dead'` is `orders_dead.fifo`); a published config that still carries `'suffix' => '.dlq'` keeps
+`.dlq`, so set `'suffix' => null` (the new default) or `'-dlq'` on SQS.
 
 Permanently-failed (and, with `on_unknown_urn => 'dead_letter'`, unroutable)
 messages are republished to the DLQ as the **same** envelope plus an additive
